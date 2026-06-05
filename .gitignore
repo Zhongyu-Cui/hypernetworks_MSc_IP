@@ -1,0 +1,61 @@
+# Data — never commit raw or processed data
+data/raw/
+data/processed/
+data/interim/
+data/cache/
+data/external/
+
+# Model outputs, checkpoints, predictions
+outputs/
+
+# SLURM logs
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Environment
+.env
+.venv
+env/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Large binary outputs
+*.png
+*.jpg
+*.jpeg
+*.pdf
+*.h5
+*.hdf5
+*.zarr
+*.pt
+*.pth
+*.ckpt
+*.bin
+
+# Keep these data subdirectories (splits and metadata are small and useful to track)
+!data/splits/
+!data/metadata/
