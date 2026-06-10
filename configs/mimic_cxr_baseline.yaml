@@ -1,0 +1,71 @@
+# MIMIC-CXR No Finding 二分类 baseline 配置（MEDFAIR 对齐）
+#
+# 预处理脚本: scripts/build_mimic_splits_nofinding.py
+# Dataset 类:  src/datasets/mimic_cxr_dataset.py
+#
+# 标签策略：U-Zeros
+#   No Finding Unknown(0)（报告未提及，即有其他病灶）→ 0（有病灶）
+#   No Finding Positive(2)（显式无病灶）→ 1（健康）；正例率约 30%
+
+data:
+  split_dir: data/splits/mimic_cxr_nofinding   # train.csv / val.csv / test.csv
+  image_size: "224x224"                         # CXR7-1M 预处理后的 224x224 PNG，NFS 可快速读取（~50KB/张）
+
+task:
+  name: no_finding_binary
+  target_label: "No Finding"
+  label_strategy: U-Zeros    # Unknown/Negative -> 0（有病灶），Positive -> 1（健康）
+  positive_rate: 0.302       # 训练集正例（无病灶）占比
+
+# 敏感属性编码（MEDFAIR 对齐）
+attributes:
+  sex:
+    Male: 0
+    Female: 1
+  race:
+    White: 0
+    Non-White: 1   # Black + Asian 合并；Unknown 已在预处理阶段排除
+  age:
+    age_threshold: 60   # < 60 -> 0, >= 60 -> 1（简化二分组，便于 baseline；split CSV 含原始 age 列）
+    "<60": 0
+    ">=60": 1
+
+# 图像变换
+# CXR7-1M 已将影像预处理至 224x224，Resize(256)→RandomCrop(224) 会先上采样再裁剪，
+# 无意义且引入插值噪声，因此直接在 224x224 上做旋转增强。
+# 不使用水平翻转（胸片有固定解剖左右关系）。
+transforms:
+  train:
+    resize: 224
+    rotation_degrees: 15
+  eval:
+    resize: 224
+  normalize:
+    mean: [0.485, 0.456, 0.406]
+    std: [0.229, 0.224, 0.225]
+
+# 训练超参数
+training:
+  batch_size: 128
+  num_epochs: 30
+  optimizer: AdamW
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-4
+  grad_clip_norm: 1.0
+  # 跑 3 个 seed 取均值±方差；训练脚本通过 --seed 命令行参数指定具体值
+  seeds: [42, 43, 44]
+
+# 模型
+model:
+  pretrained: true   # 使用 ImageNet 预训练权重初始化 (src/models/resnet18_pretrained.py)
+
+# 早停：监控验证集 AUC（对类别不平衡更鲁棒，且与公平性报告中分组 AUC 口径一致）
+early_stopping:
+  monitor: val_auc
+  mode: max
+  patience: 5
+  min_delta: 1.0e-4
+
+dataloader:
+  num_workers: 8
+  pin_memory: true
