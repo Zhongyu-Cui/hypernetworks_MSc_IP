@@ -61,10 +61,12 @@ class HyperHeadNet(nn.Module):
         race_embed: int = 4,
         age_embed: int = 4,
         hidden_dim: int = 64,
+        init_std: float = 1e-3,
     ) -> None:
         super().__init__()
         self.in_dim = in_dim
         self.out_dim = out_dim
+        self.init_std = init_std
 
         # 各离散属性各自的 embedding 表（离散变量 -> 稠密向量）
         self.sex_emb = nn.Embedding(num_sex, sex_embed)
@@ -93,9 +95,12 @@ class HyperHeadNet(nn.Module):
         好处：(1) 起步稳定，避免重蹈 PreactivResNet18 里 fc(out=1) 用 fan_out 初始化
         导致 logit 爆炸、训练坍缩到多数类的覆辙；(2) 让超网络从「与属性无关的统一头」
         出发，逐步学到属性相关的差异，而不是一上来就引入高方差扰动。
+
+        init_std 控制末层权重初始尺度：默认 1e-3（近零起步）；诊断「属性通路是否被
+        过小初始化人为压制」时可调大（见 src/training/diagnose_hyperhead_pathway.py）。
         """
         # 第一层 (cond -> hidden) 用默认 Linear 初始化即可
-        nn.init.normal_(self.mlp[-1].weight, mean=0.0, std=1e-3)
+        nn.init.normal_(self.mlp[-1].weight, mean=0.0, std=self.init_std)
         nn.init.zeros_(self.mlp[-1].bias)
 
     def forward(
@@ -152,6 +157,7 @@ class ResNet18HyperHead(nn.Module):
         race_embed: int = 4,
         age_embed: int = 4,
         hyper_hidden: int = 64,
+        init_std: float = 1e-3,
     ) -> None:
         super().__init__()
 
@@ -172,6 +178,7 @@ class ResNet18HyperHead(nn.Module):
             race_embed=race_embed,
             age_embed=age_embed,
             hidden_dim=hyper_hidden,
+            init_std=init_std,
         )
 
     def extract_features(self, image: torch.Tensor) -> torch.Tensor:
