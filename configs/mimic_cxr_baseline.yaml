@@ -69,3 +69,12 @@ early_stopping:
 dataloader:
   num_workers: 8
   pin_memory: true
+
+# 重采样（敏感组 × 标签平衡）
+# 默认关闭：训练脚本仅在收到 --resample_alpha 时启用（CLI 覆盖 alpha 并强制开启），
+# 不传参时 train DataLoader 仍为 shuffle=True，行为与原 baseline 完全一致。
+# 仅作用于 train；val/test 始终保持人群真实分布。详见 src/utils/resampling.py。
+resampling:
+  enabled: false
+  dims: [sex, race, age, label]   # 平衡维度：十六格 (sex×race×age×label) 联合
+  alpha: 1.0                      # 强度：0=自然分布，1=各 cell 等概率（完全平衡）

@@ -37,6 +37,7 @@ from torchvision import transforms
 from src.datasets.mimic_cxr_dataset import MIMICCXRDataset
 from src.models.resnet18_pretrained import ResNet18Pretrained
 from src.utils.mimic_fairness import print_mimic_fairness_report, worst_case_auc
+from src.utils.resampling import build_group_label_sampler
 
 # ============================================================
 # 路径
@@ -64,6 +65,10 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train ResNet18 on MIMIC-CXR (No Finding, image-only)")
     parser.add_argument("--seed", type=int, default=None,
                         help="随机种子；缺省时取 configs/mimic_cxr_baseline.yaml 中 training.seeds[0]")
+    parser.add_argument("--resample_alpha", type=float, default=None,
+                        help="敏感组×标签平衡重采样强度 ∈[0,1]（0=自然分布，1=完全平衡）。"
+                             "缺省时不重采样，train 仍用 shuffle=True，行为与原 baseline 一致；"
+                             "给定时按该 alpha 启用 WeightedRandomSampler，平衡维度取 config 的 resampling.dims。")
     return parser.parse_args()
 
 
@@ -100,6 +105,7 @@ def get_dataloaders(
     cfg: dict,
     train_transform: transforms.Compose,
     eval_transform: transforms.Compose,
+    resample_alpha: float | None = None,
 ) -> tuple[DataLoader, DataLoader, DataLoader]:
     """
     构建 train / val / test DataLoader。
@@ -107,6 +113,11 @@ def get_dataloaders(
     三个 split 已由 scripts/build_mimic_splits_nofinding.py 按患者级划分写入独立 CSV
     (data/splits/mimic_cxr_nofinding/{train,val,test}.csv)，此处直接加载，无需再次切分。
     val / test 保持人群真实分布以确保评估指标可信。
+
+    Args:
+        resample_alpha: 若为 None（默认），train 用 shuffle=True，与原 baseline 一致；
+            若给定，则用 WeightedRandomSampler 按 config 的 resampling.dims 做敏感组×标签
+            平衡（强度 alpha），仅作用于 train（val/test 不变）。
     """
     split_dir = REPO_ROOT / cfg["data"]["split_dir"]
     image_size = cfg["data"]["image_size"]
@@ -123,8 +134,16 @@ def get_dataloaders(
     test_set = MIMICCXRDataset(split_dir / "test.csv", transform=eval_transform,
                                 image_size=image_size, age_threshold=age_threshold)
 
-    train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True,
-                              num_workers=num_workers, pin_memory=pin_memory)
+    # 重采样仅改变 train 的取样方式：传 sampler 时必须 shuffle=False（二者互斥）
+    if resample_alpha is None:
+        train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True,
+                                  num_workers=num_workers, pin_memory=pin_memory)
+    else:
+        sampler = build_group_label_sampler(
+            train_set, dims=cfg["resampling"]["dims"], alpha=resample_alpha, verbose=True,
+        )
+        train_loader = DataLoader(train_set, batch_size=batch_size, sampler=sampler,
+                                  num_workers=num_workers, pin_memory=pin_memory)
     val_loader = DataLoader(val_set, batch_size=batch_size, shuffle=False,
                             num_workers=num_workers, pin_memory=pin_memory)
     test_loader = DataLoader(test_set, batch_size=batch_size, shuffle=False,
@@ -284,15 +303,30 @@ def main() -> None:
     seed = args.seed if args.seed is not None else train_cfg["seeds"][0]
     torch.manual_seed(seed)
 
+    # 重采样：CLI --resample_alpha 优先；缺省时回落到 config（仅当 resampling.enabled 时启用）
+    resample_alpha = args.resample_alpha
+    if resample_alpha is None and cfg.get("resampling", {}).get("enabled", False):
+        resample_alpha = cfg["resampling"]["alpha"]
+    # checkpoint 命名加 resample tag，避免覆盖原 baseline (resnet18_no_finding_seed*) 权重
+    tag = f"_resample_a{resample_alpha}" if resample_alpha is not None else ""
+
+    if resample_alpha is None:
+        resample_status = "OFF (shuffle=True)"
+    else:
+        resample_status = f"ON  alpha={resample_alpha}  dims={cfg['resampling']['dims']}"
+
     print(f"Device: {DEVICE}")
     print(f"Seed  : {seed}")
+    print(f"Resampling: {resample_status}")
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    ckpt_overall_path = OUTPUT_DIR / f"resnet18_no_finding_seed{seed}_best_overall.pth"
-    ckpt_worstcase_path = OUTPUT_DIR / f"resnet18_no_finding_seed{seed}_best_worstcase.pth"
+    ckpt_overall_path = OUTPUT_DIR / f"resnet18_no_finding{tag}_seed{seed}_best_overall.pth"
+    ckpt_worstcase_path = OUTPUT_DIR / f"resnet18_no_finding{tag}_seed{seed}_best_worstcase.pth"
 
     print("\nLoading MIMIC-CXR (No Finding, U-Zeros)...")
     train_transform, eval_transform = build_transforms(cfg)
-    train_loader, val_loader, test_loader = get_dataloaders(cfg, train_transform, eval_transform)
+    train_loader, val_loader, test_loader = get_dataloaders(
+        cfg, train_transform, eval_transform, resample_alpha=resample_alpha,
+    )
     print(f"  Train: {len(train_loader.dataset):,} images")
     print(f"  Val  : {len(val_loader.dataset):,}")
     print(f"  Test : {len(test_loader.dataset):,}")
