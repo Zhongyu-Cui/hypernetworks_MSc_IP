@@ -166,6 +166,77 @@ class PatientEmbedding(nn.Module):
         return self.fuse(cond)                              # [B, out_dim]
 
 
+class SkinEmbedding(nn.Module):
+    """
+    Fitzpatrick17k 的条件通路: 唯一敏感属性是肤色 skin (Fitzpatrick I–VI → 0–5)，
+    单个离散属性 (6 类) 用 nn.Embedding 编码后经与 PatientEmbedding 同款的两层 fuse
+    MLP 投到 profile vector。输出维度与 PatientEmbedding 一致 (out_dim)，因此可直接
+    替换 ResNet18HyperAdapt 的 self.patient_embed 而复用其全部 HyperAdapt 机制。
+
+    Args:
+        num_skin     : 肤色类别数 (Fitzpatrick: I–VI = 6)。
+        cat_embed_dim: skin embedding 维度。
+        out_dim      : profile vector 维度 (须与模型 patient_embed_dim 一致)。
+    """
+
+    def __init__(
+        self,
+        num_skin: int = 6,
+        cat_embed_dim: int = 16,
+        out_dim: int = 128,
+    ) -> None:
+        super().__init__()
+        self.skin_embed = nn.Embedding(num_skin, cat_embed_dim)
+        # fuse 结构与 PatientEmbedding 对齐 (仅输入维度由 3*dim 变为 dim)
+        self.fuse = nn.Sequential(
+            nn.Linear(cat_embed_dim, out_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(out_dim, out_dim),
+        )
+
+    def forward(self, skin: torch.Tensor) -> torch.Tensor:
+        """skin: [B] (long, 0–5) -> patient profile [B, out_dim]。"""
+        return self.fuse(self.skin_embed(skin))             # [B, out_dim]
+
+
+class AgeEmbedding(nn.Module):
+    """
+    HAM10000 的单属性条件通路: 这里只用 age_group 一个敏感属性条件化 (sex 轴在 HAM 的
+    条件互信息诊断中读弱/null, age 轴读出可复现的 I(Y;age|X)>0, 故先只条件化 age)。
+    单个离散属性 (4 有效组: 20-40/40-60/60-80/80+ → 0–3) 用 nn.Embedding 编码后经与
+    SkinEmbedding / PatientEmbedding 同款的两层 fuse MLP 投到 profile vector。输出维度与
+    PatientEmbedding 一致 (out_dim), 因此可直接替换 ResNet18HyperAdapt 的 self.patient_embed
+    而复用其全部 HyperAdapt 机制。
+
+    ⚠️ age_group==-1 (0-20 排除组) 不是合法 embedding 索引, 训练/评估前必须在数据侧过滤
+       age_group>=0 (见 train_ham10000_hyperadapt.py 的 _filter_age_valid)。
+
+    Args:
+        num_age      : age_group 有效类别数 (HAM: 4)。
+        cat_embed_dim: age embedding 维度。
+        out_dim      : profile vector 维度 (须与模型 patient_embed_dim 一致)。
+    """
+
+    def __init__(
+        self,
+        num_age: int = 4,
+        cat_embed_dim: int = 16,
+        out_dim: int = 128,
+    ) -> None:
+        super().__init__()
+        self.age_embed = nn.Embedding(num_age, cat_embed_dim)
+        # fuse 结构与 SkinEmbedding 对齐 (单属性: 输入维度 = cat_embed_dim)
+        self.fuse = nn.Sequential(
+            nn.Linear(cat_embed_dim, out_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(out_dim, out_dim),
+        )
+
+    def forward(self, age_group: torch.Tensor) -> torch.Tensor:
+        """age_group: [B] (long, 0–3) -> patient profile [B, out_dim]。"""
+        return self.fuse(self.age_embed(age_group))         # [B, out_dim]
+
+
 # ============================================================
 # HyperAdapt BasicBlock (与 torchvision BasicBlock 命名对齐)
 # ============================================================
@@ -497,22 +568,22 @@ class ResNet18HyperAdapt(nn.Module):
     def forward(
         self,
         image: torch.Tensor,
-        sex: torch.Tensor,
-        race: torch.Tensor,
-        age_group: torch.Tensor,
+        *attrs: torch.Tensor,
     ) -> torch.Tensor:
         """
         Args:
-            image     : [B, 3, 224, 224] 图像 (CXR 经 Grayscale(3) 复制为 3 通道)。
-            sex       : [B] long，0=Male, 1=Female。
-            race      : [B] long，0=White, 1=Non-White。
-            age_group : [B] long，0=<thr, 1=>=thr。
+            image : [B, 3, 224, 224] 图像 (CXR 经 Grayscale(3) 复制为 3 通道)。
+            *attrs: 若干离散敏感属性，每个为 [B] long，按位置传给 self.patient_embed。
+                - MIMIC (默认 PatientEmbedding): (sex, race, age_group)，0=Male/White/<thr 等。
+                - Fitzpatrick (ResNet18HyperAdaptSkin 的 SkinEmbedding): 单个 (skin,)，0–5。
+                forward 不关心属性语义，只把 *attrs 转交条件通路生成 embedding——这是
+                单/多属性数据集能共用整套 HyperAdapt 机制 (A_gen/B_gen/逐样本卷积/fc) 的关键。
 
         Returns:
             logits: [B, num_classes]。
         """
         # 1. patient embedding (一次性算出条件向量)
-        embedding = self.patient_embed(sex, race, age_group)   # [B, embed_dim]
+        embedding = self.patient_embed(*attrs)                 # [B, embed_dim]
         batch_size = embedding.shape[0]
 
         # 2. 预生成 4 个 stage 的 shared-A。同 stage 内所有 block / conv 共用 A_c，
@@ -569,6 +640,101 @@ class ResNet18HyperAdapt(nn.Module):
 
 
 # ============================================================
+# ResNet-18 + HyperAdapt for Fitzpatrick17k (单一肤色属性)
+# ============================================================
+class ResNet18HyperAdaptSkin(ResNet18HyperAdapt):
+    """
+    Fitzpatrick17k 版 HyperAdapt: 复用 ResNet18HyperAdapt 的全部机制 (ImageNet 预训练
+    backbone + 每个 conv 的 channel-wise 乘性调制 + fc 加性低秩更新 + Δθ≈0 初始化)，
+    仅把 MIMIC 的三属性条件通路 (sex/race/age_group, PatientEmbedding) 替换为单一肤色
+    属性 (skin ∈ {0..5}, SkinEmbedding)，以对齐 FitzpatrickDataset 的 (image, label, skin)。
+
+    forward 签名 (image, skin) ——父类 forward 已泛化为 (image, *attrs)，此处单属性即
+    self.patient_embed(skin)；其余前向/反向、param_breakdown 完全复用父类。
+
+    Args:
+        num_classes      : 分类头输出维度 (malignant 二分类 → 1，配 BCEWithLogitsLoss)。
+        num_skin         : 肤色类别数 (Fitzpatrick I–VI = 6)。
+        patient_embed_dim: profile vector 维度 (须与 SkinEmbedding.out_dim 一致)。
+        rank             : 低秩分解的秩 k。
+        pretrained       : 是否载入 ImageNet 预训练 backbone (与 baseline 一致, 默认 True)。
+        freeze_backbone  : 是否冻结特征提取 backbone (只训超网络生成器 + 任务头 fc)。
+    """
+
+    def __init__(
+        self,
+        num_classes: int = 1,
+        num_skin: int = 6,
+        patient_embed_dim: int = 128,
+        rank: int = 4,
+        pretrained: bool = True,
+        freeze_backbone: bool = False,
+    ) -> None:
+        # 先按父类构建完整 HyperAdapt (含预训练载入 / 冻结)，patient_embed 暂为
+        # 默认 PatientEmbedding；随后整体替换为单属性 SkinEmbedding。
+        super().__init__(
+            num_classes=num_classes,
+            patient_embed_dim=patient_embed_dim,
+            rank=rank,
+            pretrained=pretrained,
+            freeze_backbone=freeze_backbone,
+        )
+        # 替换条件通路: 三属性 → 单一 6 类肤色 (输出维度不变, 不影响下游 A_gen/B_gen/fc)
+        self.patient_embed = SkinEmbedding(
+            num_skin=num_skin, cat_embed_dim=16, out_dim=patient_embed_dim,
+        )
+
+
+# ============================================================
+# ResNet-18 + HyperAdapt for HAM10000 (单一 age 属性)
+# ============================================================
+class ResNet18HyperAdaptAge(ResNet18HyperAdapt):
+    """
+    HAM10000 版 HyperAdapt: 复用 ResNet18HyperAdapt 的全部机制 (ImageNet 预训练 backbone +
+    每个 conv 的 channel-wise 乘性调制 + fc 加性低秩更新 + Δθ≈0 初始化)，仅把三属性条件通路
+    (sex/race/age_group, PatientEmbedding) 替换为单一 age_group 属性 (age ∈ {0..3},
+    AgeEmbedding)，以对齐 HAM10000Dataset 的 (image, label, sex, age_group)——这里**只条件化
+    age**: HAM 条件互信息诊断里 sex 轴读弱/null、age 轴读出可复现 I(Y;age|X)>0, 故先只接 age。
+
+    forward 签名 (image, age_group) ——父类 forward 已泛化为 (image, *attrs)，此处单属性即
+    self.patient_embed(age_group)；其余前向/反向、param_breakdown 完全复用父类。
+
+    ⚠️ 仅接受 age_group∈{0..3}; age_group==-1 (0-20 排除组) 须在数据侧先过滤 (训练脚本负责)。
+
+    Args:
+        num_classes      : 分类头输出维度 (malignant 二分类 → 1，配 BCEWithLogitsLoss)。
+        num_age          : age_group 有效类别数 (HAM: 4)。
+        patient_embed_dim: profile vector 维度 (须与 AgeEmbedding.out_dim 一致)。
+        rank             : 低秩分解的秩 k。
+        pretrained       : 是否载入 ImageNet 预训练 backbone (与 baseline 一致, 默认 True)。
+        freeze_backbone  : 是否冻结特征提取 backbone (只训超网络生成器 + 任务头 fc)。
+    """
+
+    def __init__(
+        self,
+        num_classes: int = 1,
+        num_age: int = 4,
+        patient_embed_dim: int = 128,
+        rank: int = 4,
+        pretrained: bool = True,
+        freeze_backbone: bool = False,
+    ) -> None:
+        # 先按父类构建完整 HyperAdapt (含预训练载入 / 冻结)，patient_embed 暂为
+        # 默认 PatientEmbedding；随后整体替换为单属性 AgeEmbedding。
+        super().__init__(
+            num_classes=num_classes,
+            patient_embed_dim=patient_embed_dim,
+            rank=rank,
+            pretrained=pretrained,
+            freeze_backbone=freeze_backbone,
+        )
+        # 替换条件通路: 三属性 → 单一 4 类 age (输出维度不变, 不影响下游 A_gen/B_gen/fc)
+        self.patient_embed = AgeEmbedding(
+            num_age=num_age, cat_embed_dim=16, out_dim=patient_embed_dim,
+        )
+
+
+# ============================================================
 # 结构自检
 # ============================================================
 if __name__ == "__main__":
@@ -584,8 +750,8 @@ if __name__ == "__main__":
     age = torch.tensor([0, 0, 1, 1], dtype=torch.long)
 
     logits = model(image, sex, race, age)
-    print(f"Input  shape : {tuple(image.shape)}")         # (4, 3, 224, 224)
-    print(f"Logits shape : {tuple(logits.shape)}")        # (4, 1)
+    print(f"[MIMIC 3-attr] Input  shape : {tuple(image.shape)}")   # (4, 3, 224, 224)
+    print(f"[MIMIC 3-attr] Logits shape : {tuple(logits.shape)}")  # (4, 1)
 
     n_total, n_adapter, n_backbone = model.param_breakdown()
     print(f"Total    params : {n_total:>12,}")
@@ -596,3 +762,25 @@ if __name__ == "__main__":
     loss = logits.sum()
     loss.backward()
     print("Backward pass OK.")
+
+    # ---- Fitzpatrick 单属性 (skin) 变体自检 ----
+    skin_model = ResNet18HyperAdaptSkin(num_classes=1, num_skin=6, rank=4, pretrained=False)
+    skin_model.eval()
+    skin = torch.tensor([0, 2, 4, 5], dtype=torch.long)
+    skin_logits = skin_model(image, skin)
+    print(f"\n[Fitz 1-attr ] Logits shape : {tuple(skin_logits.shape)}")  # (4, 1)
+    n_total_s, n_adapter_s, n_backbone_s = skin_model.param_breakdown()
+    print(f"Total params : {n_total_s:>12,} (backbone {n_backbone_s:,} + adapter {n_adapter_s:,})")
+    skin_logits.sum().backward()
+    print("Skin variant backward pass OK.")
+
+    # ---- HAM10000 单属性 (age) 变体自检 ----
+    age_model = ResNet18HyperAdaptAge(num_classes=1, num_age=4, rank=4, pretrained=False)
+    age_model.eval()
+    age = torch.tensor([0, 1, 2, 3], dtype=torch.long)   # 4 个有效 age 组 (无 -1)
+    age_logits = age_model(image, age)
+    print(f"\n[HAM 1-attr  ] Logits shape : {tuple(age_logits.shape)}")  # (4, 1)
+    n_total_a, n_adapter_a, n_backbone_a = age_model.param_breakdown()
+    print(f"Total params : {n_total_a:>12,} (backbone {n_backbone_a:,} + adapter {n_adapter_a:,})")
+    age_logits.sum().backward()
+    print("Age variant backward pass OK.")

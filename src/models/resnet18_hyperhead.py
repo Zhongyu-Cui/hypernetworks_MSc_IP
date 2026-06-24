@@ -131,6 +131,69 @@ class HyperHeadNet(nn.Module):
 
 
 # ============================================================
+# HyperNetwork (单属性版): 由单一 age 生成分类头 (fc) 的权重与偏置
+# ============================================================
+class AgeHyperHeadNet(nn.Module):
+    """
+    HyperHeadNet 的单属性版：只用 age_group (HAM10000: 4 有效组) 一个敏感属性生成主干分类头
+    的逐样本参数。结构与 HyperHeadNet 对齐 (embedding → 小 MLP → 展平 fc 权重+偏置、末层近零
+    初始化)，仅条件向量由「sex+race+age 三 embedding 拼接」缩为「单一 age embedding」。
+
+    为什么只用 age：HAM 条件互信息诊断 (作业 68297) 显示 sex 轴 I(Y;sex|X)≈0、age 轴读出可
+    复现 I(Y;age|X)>0。而 HyperHead「在共享 φ(X) 上按属性生成逐样本线性头」恰好等价于诊断 E1
+    的 int 模型 (逐组独立线性头)——是与该正向信号最对口的架构。
+
+    ⚠️ age_group==-1 (0-20 排除组) 不是合法 embedding 索引，训练/评估前须在数据侧过滤 age_group>=0。
+
+    Args:
+        in_dim    : 主干分类头输入维度 (ResNet-18 = 512)。
+        out_dim   : 主干分类头输出维度 (malignant 二分类 = 1)。
+        num_age   : age_group 有效类别数 (HAM: 4)。
+        age_embed : age embedding 维度。
+        hidden_dim: HyperNet 内部 MLP 隐藏层维度。
+        init_std  : 末层权重初始尺度 (近零起步，使初始 logit≈0、各样本几乎一致)。
+    """
+
+    def __init__(
+        self,
+        in_dim: int = 512,
+        out_dim: int = 1,
+        num_age: int = 4,
+        age_embed: int = 4,
+        hidden_dim: int = 64,
+        init_std: float = 1e-3,
+    ) -> None:
+        super().__init__()
+        self.in_dim = in_dim
+        self.out_dim = out_dim
+        self.init_std = init_std
+
+        self.age_emb = nn.Embedding(num_age, age_embed)
+
+        weight_numel = in_dim * out_dim   # 展平后的 fc 权重元素数 (512*1)
+        bias_numel = out_dim              # fc 偏置元素数 (1)
+        self.mlp = nn.Sequential(
+            nn.Linear(age_embed, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_dim, weight_numel + bias_numel),
+        )
+        self._init_weights()
+
+    def _init_weights(self) -> None:
+        """末层近零 + 零偏置：初期生成头≈0、logit≈0、各样本几乎一致 (与 HyperHeadNet 同理)。"""
+        nn.init.normal_(self.mlp[-1].weight, mean=0.0, std=self.init_std)
+        nn.init.zeros_(self.mlp[-1].bias)
+
+    def forward(self, age_group: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """age_group: [B] long (0–3) → (weight [B, out_dim, in_dim], bias [B, out_dim])。"""
+        a = self.age_emb(age_group)            # [B, age_embed]
+        out = self.mlp(a)                      # [B, in_dim*out_dim + out_dim]
+        weight = out[:, : self.in_dim * self.out_dim].view(-1, self.out_dim, self.in_dim)
+        bias = out[:, self.in_dim * self.out_dim :]
+        return weight, bias
+
+
+# ============================================================
 # ResNet-18 (ImageNet 预训练) + HyperHead
 # ============================================================
 class ResNet18HyperHead(nn.Module):
@@ -215,6 +278,69 @@ class ResNet18HyperHead(nn.Module):
 
 
 # ============================================================
+# ResNet-18 + HyperHead for HAM10000 (单一 age 属性)
+# ============================================================
+class ResNet18HyperHeadAge(nn.Module):
+    """
+    HAM10000 版 HyperHead: backbone 与 baseline 完全一致 (ImageNet 预训练 torchvision
+    ResNet-18, fc→Identity, 输出 512 维特征)，分类头由 AgeHyperHeadNet 依据单一 age_group
+    逐样本生成。**只条件化 age** (sex 轴诊断读弱/null，先不接)。
+
+    forward 签名 (image, age_group)，与 HAM10000Dataset 的 (image, label, sex, age_group)
+    中 age 对齐 (sex 仍解包但不进模型)。⚠️ 仅接受 age_group∈{0..3}; -1 须在数据侧先过滤。
+
+    Args:
+        num_classes : 分类头输出维度 (malignant 二分类 → 1)。
+        num_age     : age_group 有效类别数 (HAM: 4)。
+        age_embed   : age embedding 维度。
+        hyper_hidden: HyperNet 内部 MLP 隐藏层维度。
+        init_std    : 末层近零初始尺度 (与 baseline 起步稳定一致)。
+    """
+
+    def __init__(
+        self,
+        num_classes: int = 1,
+        num_age: int = 4,
+        age_embed: int = 4,
+        hyper_hidden: int = 64,
+        init_std: float = 1e-3,
+    ) -> None:
+        super().__init__()
+        # backbone 与 baseline 完全一致 (与 ResNet18HyperHead 同构)
+        self.backbone = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
+        self.feat_dim = self.backbone.fc.in_features   # 512
+        self.backbone.fc = nn.Identity()
+
+        # 单属性 age HyperNet 取代原 fc
+        self.hyper = AgeHyperHeadNet(
+            in_dim=self.feat_dim,
+            out_dim=num_classes,
+            num_age=num_age,
+            age_embed=age_embed,
+            hidden_dim=hyper_hidden,
+            init_std=init_std,
+        )
+
+    def extract_features(self, image: torch.Tensor) -> torch.Tensor:
+        """只跑 backbone，返回 [B, feat_dim] 特征 (fc 之前)。"""
+        return self.backbone(image)
+
+    def forward(self, image: torch.Tensor, age_group: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            image    : [B, 3, 224, 224] 皮肤镜 RGB 图像。
+            age_group: [B] long，0–3 (4 有效年龄组；-1 须已过滤)。
+
+        Returns:
+            logits: [B, num_classes]。
+        """
+        feat = self.extract_features(image)            # [B, 512]
+        weight, bias = self.hyper(age_group)           # [B, C, 512], [B, C]
+        logits = torch.bmm(weight, feat.unsqueeze(-1)).squeeze(-1) + bias  # [B, C]
+        return logits
+
+
+# ============================================================
 # 结构自检
 # ============================================================
 if __name__ == "__main__":
@@ -242,3 +368,14 @@ if __name__ == "__main__":
     loss = logits.sum()
     loss.backward()
     print("\nBackward pass OK.")
+
+    # ---- HAM10000 单属性 (age) 变体自检 ----
+    age_model = ResNet18HyperHeadAge(num_classes=1, num_age=4)
+    age = torch.tensor([0, 1, 2, 3], dtype=torch.long)   # 4 个有效 age 组 (无 -1)
+    age_logits = age_model(image, age)
+    print(f"\n[HAM age 1-attr] Logits : {tuple(age_logits.shape)}")  # (4, 1)
+    n_bb = sum(p.numel() for p in age_model.backbone.parameters())
+    n_hy = sum(p.numel() for p in age_model.hyper.parameters())
+    print(f"Backbone {n_bb:,} + HyperNet {n_hy:,} = {n_bb + n_hy:,}")
+    age_logits.sum().backward()
+    print("Age variant backward pass OK.")

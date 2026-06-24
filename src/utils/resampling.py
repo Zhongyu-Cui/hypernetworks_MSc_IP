@@ -22,12 +22,15 @@ import numpy as np
 import torch
 from torch.utils.data import WeightedRandomSampler
 
-# 平衡维度名 -> MIMICCXRDataset 上对应的属性数组名
+# 平衡维度名 -> Dataset 上对应的属性数组名
+# MIMIC-CXR: sex/race/age/label（二值）；Fitzpatrick17k: skin（0–5 六值）/label
+# _cell_ids 用混合进制编码，对任意 0 起整数维度均成立，故 skin 非二值也安全。
 _DIM_TO_ATTR = {
     "sex": "sexes",
     "race": "races",
     "age": "age_groups",
     "label": "labels",
+    "skin": "skins",   # FitzpatrickDataset.skins（0–5），令 dims=[skin,label] 即时可用
 }
 
 

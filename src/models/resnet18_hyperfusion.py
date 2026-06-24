@@ -91,6 +91,41 @@ class PatientEmbedding(nn.Module):
         return self.fuse(cond)                              # [B, out_dim]
 
 
+class AgeEmbedding(nn.Module):
+    """
+    HAM10000 的单属性条件通路: 只用 age_group 一个敏感属性 (4 有效组: 20-40/40-60/60-80/80+
+    → 0–3)。结构与本模块 PatientEmbedding 对齐 (单 embedding → 两层 fuse MLP), 仅输入由
+    「sex+race+age 三 embedding 拼接」缩为「单一 age embedding」; 输出维度 out_dim 与
+    PatientEmbedding 一致, 可直接替换 ResNet18HyperFusion 的 self.patient_embed。
+
+    为什么只用 age: HAM 条件互信息诊断 (作业 68297) 显示 sex 轴 I(Y;sex|X)≈0、age 轴读出
+    可复现 I(Y;age|X)>0, 故先只接 age。⚠️ age_group==-1 (0-20 排除组) 非法索引, 须先过滤。
+
+    Args:
+        num_age      : age_group 有效类别数 (HAM: 4)。
+        cat_embed_dim: age embedding 维度。
+        out_dim      : patient profile 维度 (须与模型 patient_embed_dim 一致)。
+    """
+
+    def __init__(
+        self,
+        num_age: int = 4,
+        cat_embed_dim: int = 16,
+        out_dim: int = 128,
+    ) -> None:
+        super().__init__()
+        self.age_embed = nn.Embedding(num_age, cat_embed_dim)
+        self.fuse = nn.Sequential(
+            nn.Linear(cat_embed_dim, out_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(out_dim, out_dim),
+        )
+
+    def forward(self, age_group: torch.Tensor) -> torch.Tensor:
+        """age_group: [B] (long, 0–3) -> patient profile [B, out_dim]。"""
+        return self.fuse(self.age_embed(age_group))         # [B, out_dim]
+
+
 # ============================================================
 # HyperFusion 超网络: patient profile -> downsample 卷积权重的扰动 Δθ
 # ============================================================
@@ -360,6 +395,85 @@ class ResNet18HyperFusion(nn.Module):
 
 
 # ============================================================
+# ResNet-18 + HyperFusion for HAM10000 (单一 age 属性)
+# ============================================================
+class ResNet18HyperFusionAge(ResNet18HyperFusion):
+    """
+    HAM10000 版 HyperFusion: 复用 ResNet18HyperFusion 的全部机制 (仅 layer4[0].downsample
+    1x1 conv 由超网络 MIP additive 逐样本生成 θ_ds=θ_0+Δθ、E_L2 投影、grouped conv、其余层
+    与 baseline 共享), 仅把三属性 PatientEmbedding 替换为单一 age 的 AgeEmbedding, 并把
+    forward 签名改为 (image, age_group)——**只条件化 age** (sex 轴诊断读弱/null, 先不接)。
+
+    ⚠️ 仅接受 age_group∈{0..3}; age_group==-1 (0-20 排除组) 须在数据侧先过滤 (训练脚本负责)。
+
+    Args:
+        num_classes      : 分类头输出维度 (malignant 二分类 → 1)。
+        num_age          : age_group 有效类别数 (HAM: 4)。
+        patient_embed_dim: patient profile 维度 (须与 AgeEmbedding.out_dim 一致)。
+        hyper_hidden     : 超网络 MLP 隐藏层维度。
+        mip_scale        : MIP 输出层小尺度因子 (越小初始越接近纯 baseline)。
+        use_l2_norm      : 是否对 patient profile 做 E_L2 投影。
+        pretrained       : 是否载入 ImageNet 预训练 backbone (与 baseline 一致, 默认 True)。
+    """
+
+    def __init__(
+        self,
+        num_classes: int = 1,
+        num_age: int = 4,
+        patient_embed_dim: int = 128,
+        hyper_hidden: int = 64,
+        mip_scale: float = 0.01,
+        use_l2_norm: bool = True,
+        pretrained: bool = True,
+    ) -> None:
+        # 先按父类构建完整 HyperFusion (含预训练载入 / MIP 初始化)，patient_embed 暂为
+        # 默认三属性 PatientEmbedding；随后整体替换为单属性 AgeEmbedding。
+        super().__init__(
+            num_classes=num_classes,
+            patient_embed_dim=patient_embed_dim,
+            hyper_hidden=hyper_hidden,
+            mip_scale=mip_scale,
+            use_l2_norm=use_l2_norm,
+            pretrained=pretrained,
+        )
+        # 替换条件通路: 三属性 → 单一 4 类 age (输出维度不变, 不影响 hyper_net / 注入点)
+        self.patient_embed = AgeEmbedding(
+            num_age=num_age, cat_embed_dim=16, out_dim=patient_embed_dim,
+        )
+
+    def forward(self, image: torch.Tensor, age_group: torch.Tensor) -> torch.Tensor:
+        """
+        与父类 forward 同构，仅条件向量由单一 age 生成 (父类 forward 签名是三属性，此处覆盖)。
+
+        Args:
+            image    : [B, 3, 224, 224] 皮肤镜 RGB 图像。
+            age_group: [B] long，0–3 (4 有效年龄组；-1 须已过滤)。
+
+        Returns:
+            logits: [B, num_classes]。
+        """
+        bb = self.backbone
+        embedding = self.patient_embed(age_group)              # [B, embed_dim]
+
+        x = bb.conv1(image)
+        x = bb.bn1(x)
+        x = bb.relu(x)
+        x = bb.maxpool(x)
+
+        x = bb.layer1(x)
+        x = bb.layer2(x)
+        x = bb.layer3(x)
+
+        x = self._hyper_layer4_block0(x, embedding)            # 唯一注入点
+        x = bb.layer4[1](x)
+
+        x = bb.avgpool(x)
+        x = torch.flatten(x, 1)
+        logits = bb.fc(x)
+        return logits
+
+
+# ============================================================
 # 结构自检
 # ============================================================
 if __name__ == "__main__":
@@ -397,3 +511,21 @@ if __name__ == "__main__":
     print(f"theta_0  gradient sum : {theta0_grad:.4f}")
     print("Backward pass OK." if hyper_grad > 0 and theta0_grad > 0 else
           "HyperNet/theta_0 没拿到梯度, 检查 forward 链路!")
+
+    # ---- HAM10000 单属性 (age) 变体自检 ----
+    age_model = ResNet18HyperFusionAge(num_classes=1, num_age=4, mip_scale=0.01, pretrained=False)
+    age_model.eval()
+    age_only = torch.tensor([0, 1, 2, 3], dtype=torch.long)   # 4 个有效 age 组 (无 -1)
+    age_logits = age_model(image, age_only)
+    print(f"\n[HAM age 1-attr] Logits : {tuple(age_logits.shape)}")  # (4, 1)
+    n_total_a, n_hyper_a, n_backbone_a = age_model.param_breakdown()
+    print(f"Total params : {n_total_a:>12,} (backbone {n_backbone_a:,} + hyper {n_hyper_a:,})")
+    age_logits.sum().backward()
+    a_hyper_grad = sum(
+        p.grad.abs().sum().item()
+        for p in (*age_model.patient_embed.parameters(), *age_model.hyper_net.parameters())
+        if p.grad is not None
+    )
+    a_theta0_grad = age_model.backbone.layer4[0].downsample[0].weight.grad.abs().sum().item()
+    print("Age variant backward pass OK." if a_hyper_grad > 0 and a_theta0_grad > 0 else
+          "Age 变体 HyperNet/theta_0 没拿到梯度!")
