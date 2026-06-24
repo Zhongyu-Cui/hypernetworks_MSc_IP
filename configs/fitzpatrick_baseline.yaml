@@ -1,0 +1,75 @@
+# Fitzpatrick17k malignant 二分类 baseline 配置（MEDFAIR 对齐）
+#
+# 预处理脚本: scripts/build_fitzpatrick_splits.py
+# Dataset 类:  src/datasets/fitzpatrick_dataset.py
+#
+# 标签策略：malignant 二分类
+#   three_partition_label 中 "non-neoplastic" 与 "benign" → 0（良性）
+#   "malignant" → 1（恶性）；恶性占比约 13.5%
+
+data:
+  split_dir: data/splits/fitzpatrick17k   # train.csv / val.csv / test.csv
+  # 图像为 preproc_224x224 RGB JPEG（uint8），直接 RGB 加载，无需 16-bit 处理
+
+task:
+  name: malignant_binary
+  target_label: "malignant"          # three_partition_label == 'malignant'
+  label_strategy: malignant_vs_rest  # non-neoplastic + benign -> 0, malignant -> 1
+  positive_rate: 0.135               # 全体恶性占比（划分前）
+
+# 敏感属性编码（MEDFAIR 对齐）：单一肤色轴，6 个子群
+attributes:
+  skin:                # fitzpatrick_scale - 1
+    I: 0
+    II: 1
+    III: 2
+    IV: 3
+    V: 4
+    VI: 5
+    # fitzpatrick_scale == -1（未知）已在预处理阶段排除（对齐论文 16,012）
+
+# 图像变换（224 原生方案，见 build_fitzpatrick_splits.py 头注）
+# 源图已是 preproc_224x224，不做 MEDFAIR 的 Resize(256)→RandomCrop(224)
+# （会先上采样再裁剪，引入无信息插值），直接在 224 上做翻转+旋转增强。
+# 保留水平翻转：皮损无解剖学左右约束（与 MEDFAIR 一致；与本项目 CXR 流程「不翻转」相反）。
+transforms:
+  train:
+    horizontal_flip: true
+    rotation_degrees: 15
+  eval: {}            # 验证/测试不做几何增强
+  normalize:
+    mean: [0.485, 0.456, 0.406]
+    std: [0.229, 0.224, 0.225]
+
+# 训练超参数（与 MIMIC baseline 对齐，便于横向比较）
+training:
+  batch_size: 128
+  num_epochs: 30
+  optimizer: AdamW
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-4
+  grad_clip_norm: 1.0
+  seeds: [42, 43, 44]
+
+# 模型
+model:
+  pretrained: true   # ImageNet 预训练权重 (src/models/resnet18_pretrained.py)
+
+# 早停：监控验证集 AUC
+early_stopping:
+  monitor: val_auc
+  mode: max
+  patience: 5
+  min_delta: 1.0e-4
+
+dataloader:
+  num_workers: 8
+  pin_memory: true
+
+# 重采样（敏感组 × 标签平衡）
+# 默认关闭；深肤色（型 V/VI，n≈2168）显著偏少，是 WeightedRandomSampler 的天然试验场。
+# 仅作用于 train；val/test 始终保持人群真实分布。详见 src/utils/resampling.py。
+resampling:
+  enabled: false
+  dims: [skin, label]   # 平衡维度：肤色 × 标签（6×2=12 格）联合
+  alpha: 1.0            # 强度：0=自然分布，1=各 cell 等概率（完全平衡）
