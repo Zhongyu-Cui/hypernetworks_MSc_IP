@@ -1,0 +1,82 @@
+# CheXpert No Finding 二分类 baseline 配置（MEDFAIR 对齐；与 MIMIC baseline 严格同参）
+#
+# 预处理脚本: scripts/build_chexpert_splits_nofinding.py
+# Dataset 类:  src/datasets/mimic_cxr_dataset.py（CheXpert 与 MIMIC schema 同构，直接复用）
+#
+# 标签策略：官方 CheXbert impression 段标注（impression_fixed.json）
+#   No Finding=Positive(1.0)（impression 段判为健康）→ 1（健康）；其余/缺失 → 0（有病灶）
+#   2026-06-29 修正历程：findings 段(75.7%)为伪影已弃用 → report 全报告(5.8%)训练坍缩
+#   → 改用 impression 段(8.4%，≈ 原版 CheXpert 论文口径，可与 MEDFAIR/Glocker 对账)。
+#
+# ⚠️ 类别不平衡：impression 口径正例率 ~8.2%（少数类=健康）。baseline 仍用裸 BCE + 不重采样。
+#    ⚠️ 若仍坍缩到多数类（AUC≈0.5），下一手为 BCE pos_weight≈11 或 --resample_alpha。
+#    ⚠️ 正例率低：logits>0 阈值下 acc/FPR/FNR 无意义，AUC（阈值无关）为唯一主指标。
+
+data:
+  split_dir: data/splits/chexpert_nofinding     # train.csv / val.csv / test.csv
+  image_size: "224x224"                          # CXR7-1M 预处理后的 224x224 PNG，NFS 可快速读取
+
+task:
+  name: no_finding_binary
+  target_label: "No Finding"
+  label_strategy: impression_chexbert   # 官方 impression 段 CheXbert 标注（impression_fixed.json），健康=1
+  positive_rate: 0.082                  # 训练集正例（健康）占比（仅记录用；impression 口径）
+
+# 敏感属性编码（MEDFAIR 对齐）
+attributes:
+  sex:
+    Male: 0
+    Female: 1
+  race:
+    White: 0
+    Non-White: 1   # Black + Asian 合并；Unknown 已在预处理阶段排除
+  age:
+    age_threshold: 60   # < 60 -> 0, >= 60 -> 1（与 MIMIC 同口径；CheXpert age 中位数 62）
+    "<60": 0
+    ">=60": 1
+
+# 图像变换（与 MIMIC 完全一致）
+# CXR7-1M 已将影像预处理至 224x224，直接在 224x224 上做旋转增强。
+# 不使用水平翻转（胸片有固定解剖左右关系）。
+transforms:
+  train:
+    resize: 224
+    rotation_degrees: 15
+  eval:
+    resize: 224
+  normalize:
+    mean: [0.485, 0.456, 0.406]
+    std: [0.229, 0.224, 0.225]
+
+# 训练超参数（与 configs/mimic_cxr_baseline.yaml 严格一致）
+training:
+  batch_size: 128
+  num_epochs: 30
+  optimizer: AdamW
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-4
+  grad_clip_norm: 1.0
+  seeds: [42, 43, 44]
+
+# 模型
+model:
+  pretrained: true   # ImageNet 预训练权重初始化 (src/models/resnet18_pretrained.py)
+
+# 早停：监控验证集 Overall AUC（对类别不平衡鲁棒，且与公平性报告分组 AUC 口径一致）
+early_stopping:
+  monitor: val_auc
+  mode: max
+  patience: 5
+  min_delta: 1.0e-4
+
+dataloader:
+  num_workers: 8
+  pin_memory: true
+
+# 重采样（敏感组 × 标签平衡）
+# baseline 默认关闭：训练脚本仅在收到 --resample_alpha 时启用（CLI 覆盖并强制开启）。
+# 仅作用于 train；val/test 始终保持人群真实分布。详见 src/utils/resampling.py。
+resampling:
+  enabled: false
+  dims: [sex, race, age, label]   # 十六格 (sex×race×age×label) 联合
+  alpha: 1.0                      # 0=自然分布，1=各 cell 等概率
