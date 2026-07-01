@@ -1,43 +1,39 @@
 """
-Train ResNet18-HyperFusion on HAM10000 (malignant, age-conditioned)
-===================================================================
-在 image-only baseline 基础上，仅在 backbone 的 layer4[0].downsample 1x1 卷积处接一个由**单一
-敏感属性 age_group**（0–3）驱动的 HyperFusion 超网络（ResNet18HyperFusionAge，MIP additive +
-E_L2 投影，初始 Δθ≈0 起步等价 baseline）。为什么只条件化 age：HAM 条件互信息诊断显示 age 轴
-I(Y;age|X)>0、sex 轴≈0，故只接 age。
+Train ResNet18-HyperFusion on PAPILA (glaucoma, age-conditioned)
+================================================================
+仅在 backbone 的 layer4[0].downsample 处接由**单一敏感属性 age_group**（≤60/>60 = 0/1）驱动的
+HyperFusion 超网络（ResNet18HyperFusionAge，num_age=2，MIP additive + E_L2 投影，初始 Δθ≈0）。
+PAPILA age_group 为二值、全部合法，**无需过滤 -1**（区别于 HAM）。PAPILA 极小，支持 --cv/--fold
+GroupKFold 保功效。
 
-**比较协议改造（A0.4）**：训练循环统一走 harness.run_training；本脚本保留 HAM-HN 特有部分：
-  - **过滤 age_group>=0**：age embedding=nn.Embedding(4)，-1（0-20）非法索引，三 split 均排除
-    （test 995→969；与 baseline 的 age/worst-case 评估内部排除 -1 一致）。
-  - unpack = unpack_sex_age；forward = forward_age（model(image, age)）；
-    fairness = print_ham10000_fairness_report。
-超参由 --config_index 取自网格；显存接近 baseline，用 config 的 batch_size=128（无需调小）。
+**比较协议改造（A0.4）**：训练循环统一走 harness.run_training；本脚本保留 PAPILA 特有的 CV split
+解析 / transforms / dataloader（cache），注入 unpack_sex_age + forward_age + print_papila_fairness_report。
+超参 lr/wd 由 --config_index 从网格取（缺省 index=2=中心点）。
 
-运行方式：重型任务，经 sbatch 提交（见 slurm/train_ham10000_hyperfusion.sh）。
+运行方式：重型任务，经 sbatch 提交（见 slurm/train_papila_hyperfusion.sh）。
 """
 
 import argparse
 from pathlib import Path
 
-import numpy as np
 import yaml
 from torch.utils.data import DataLoader
 from torchvision import transforms
 
-from src.datasets.ham10000_dataset import HAM10000Dataset
+from src.datasets.papila_dataset import PAPILADataset
 from src.models.resnet18_hyperfusion import ResNet18HyperFusionAge
 from src.training.harness.hparam_grid import get_hparam_config, grid_size
 from src.training.harness.run import seed_everything
 from src.training.harness.train_loop import forward_age, run_training, unpack_sex_age
-from src.utils.ham10000_fairness import print_ham10000_fairness_report
+from src.utils.papila_fairness import print_papila_fairness_report
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CONFIG_PATH = REPO_ROOT / "configs" / "ham10000_baseline.yaml"
-OUTPUT_DIR = Path("/vol/biomedic2/bglocker_studproj/zc125/outputs/ham10000")
+CONFIG_PATH = REPO_ROOT / "configs" / "papila_baseline.yaml"
+OUTPUT_DIR = Path("/vol/biomedic2/bglocker_studproj/zc125/outputs/papila")
 
-DATASET = "ham10000"
+DATASET = "papila"
 METHOD = "hyperfusion"
-NUM_AGE = 4   # HAM age_group 有效组 {20-40,40-60,60-80,80+}=0..3
+NUM_AGE = 2   # PAPILA age_group: ≤60=0 / >60=1（二值，无排除组）
 
 
 def load_config(path: Path) -> dict:
@@ -47,19 +43,31 @@ def load_config(path: Path) -> dict:
 
 
 def parse_args() -> argparse.Namespace:
-    """解析命令行参数（--config_index 超参网格；--seed；--batch_size 可选覆盖）。"""
-    parser = argparse.ArgumentParser(description="Train ResNet18-HyperFusion on HAM10000 (age-conditioned)")
+    """解析命令行参数（--config_index 超参网格；--seed；--cv/--fold GroupKFold；--batch_size 可选）。"""
+    parser = argparse.ArgumentParser(description="Train ResNet18-HyperFusion on PAPILA (age-conditioned)")
     parser.add_argument("--config_index", type=int, default=2,
                         help=f"超参网格配置序号 0–{grid_size() - 1}；缺省 2=中心点 (lr=1e-4, wd=1e-4)。")
     parser.add_argument("--seed", type=int, default=None,
-                        help="随机种子；缺省取 ham10000_baseline.yaml 的 training.seeds[0]")
+                        help="随机种子；缺省取 papila_baseline.yaml 的 training.seeds[0]")
+    parser.add_argument("--cv", type=int, default=0, help="K 折 GroupKFold；0=用单次 70/10/20 划分（默认）")
+    parser.add_argument("--fold", type=int, default=None, help="--cv>0 时指定折号 k ∈ [0,K)")
     parser.add_argument("--batch_size", type=int, default=None,
                         help="覆盖 config 的 batch_size；HyperFusion 单点注入显存接近 baseline，通常无需。")
     return parser.parse_args()
 
 
+def resolve_split_dir(cfg: dict, cv: int, fold: int | None) -> Path:
+    """根据 --cv/--fold 解析 split 目录（cv>=2 时取 cv{K}/fold{k}，否则用单次划分）。"""
+    base = REPO_ROOT / cfg["data"]["split_dir"]
+    if cv and cv >= 2:
+        if fold is None or not (0 <= fold < cv):
+            raise ValueError(f"--cv={cv} 需配合合法 --fold ∈ [0,{cv})")
+        return base / f"cv{cv}" / f"fold{fold}"
+    return base
+
+
 def build_transforms(cfg: dict) -> tuple[transforms.Compose, transforms.Compose]:
-    """构建训练 / 评估 transform（与 HAM baseline 严格一致）。"""
+    """构建训练 / 评估 transform（与 PAPILA baseline 一致；源图已缓存 256，Resize 幂等）。"""
     t_cfg = cfg["transforms"]
     norm_mean, norm_std = t_cfg["normalize"]["mean"], t_cfg["normalize"]["std"]
     train_c, eval_c = t_cfg["train"], t_cfg["eval"]
@@ -83,35 +91,19 @@ def build_transforms(cfg: dict) -> tuple[transforms.Compose, transforms.Compose]
     return train_transform, eval_transform
 
 
-def _filter_age_valid(dataset: HAM10000Dataset) -> int:
-    """
-    就地过滤 age_group==-1（0-20 排除组），使数据集只剩 age_group∈{0..3}。
-    age embedding=nn.Embedding(4)，-1 非法索引；且 MEDFAIR age 任务本就排除 0-20。
-    返回过滤后剩余样本数。
-    """
-    mask = np.asarray(dataset.age_groups).astype(int) >= 0
-    dataset.image_paths = dataset.image_paths[mask]
-    dataset.labels = dataset.labels[mask]
-    dataset.sexes = dataset.sexes[mask]
-    dataset.age_groups = dataset.age_groups[mask]
-    return int(mask.sum())
-
-
 def get_dataloaders(
-    cfg: dict, train_transform: transforms.Compose, eval_transform: transforms.Compose,
+    cfg: dict, split_dir: Path,
+    train_transform: transforms.Compose, eval_transform: transforms.Compose,
 ) -> tuple[DataLoader, DataLoader, DataLoader]:
-    """构建 train/val/test DataLoader，三 split 均过滤 age_group>=0（age 条件模型不能吃 -1）。"""
-    split_dir = REPO_ROOT / cfg["data"]["split_dir"]
+    """构建 train / val / test DataLoader（PAPILA 极小，dataset 开 cache=True 整库常驻内存）。"""
     batch_size = cfg["training"]["batch_size"]
     num_workers = cfg["dataloader"]["num_workers"]
     pin_memory = cfg["dataloader"]["pin_memory"]
+    cache = cfg["data"].get("cache", True)
 
-    train_set = HAM10000Dataset(split_dir / "train.csv", transform=train_transform)
-    val_set = HAM10000Dataset(split_dir / "val.csv", transform=eval_transform)
-    test_set = HAM10000Dataset(split_dir / "test.csv", transform=eval_transform)
-
-    n_tr, n_va, n_te = _filter_age_valid(train_set), _filter_age_valid(val_set), _filter_age_valid(test_set)
-    print(f"  过滤 age_group>=0 后: train {n_tr:,} / val {n_va:,} / test {n_te:,}（已排除 0-20）")
+    train_set = PAPILADataset(split_dir / "train.csv", transform=train_transform, cache=cache)
+    val_set = PAPILADataset(split_dir / "val.csv", transform=eval_transform, cache=cache)
+    test_set = PAPILADataset(split_dir / "test.csv", transform=eval_transform, cache=cache)
 
     train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True,
                               num_workers=num_workers, pin_memory=pin_memory)
@@ -123,8 +115,8 @@ def get_dataloaders(
 
 
 def _fairness_report(y_true, y_score, attrs) -> None:
-    """HAM 公平性报告回调：从 attrs 取 sex / age(=age_group) 分组键。"""
-    print_ham10000_fairness_report(
+    """PAPILA 公平性报告回调：从 attrs 取 sex / age(=age_group) 分组键。"""
+    print_papila_fairness_report(
         y_true=y_true, y_score=y_score, sex=attrs["sex"], age_group=attrs["age"], threshold=0.0,
     )
 
@@ -136,11 +128,16 @@ def main() -> None:
         cfg["training"]["batch_size"] = args.batch_size
     seed = args.seed if args.seed is not None else cfg["training"]["seeds"][0]
     hparam = get_hparam_config(args.config_index)
+    split_dir = resolve_split_dir(cfg, args.cv, args.fold)
 
     seed_everything(seed)
-    print("Loading HAM10000 (malignant, age-conditioned HyperFusion)...")
+    print(f"Loading PAPILA (glaucoma, age-conditioned HyperFusion)  split_dir={split_dir.name}...")
     train_transform, eval_transform = build_transforms(cfg)
-    train_loader, val_loader, test_loader = get_dataloaders(cfg, train_transform, eval_transform)
+    train_loader, val_loader, test_loader = get_dataloaders(
+        cfg, split_dir, train_transform, eval_transform,
+    )
+    print(f"  Train: {len(train_loader.dataset):,} | Val: {len(val_loader.dataset):,} | "
+          f"Test: {len(test_loader.dataset):,}")
 
     run_training(
         dataset=DATASET, method=METHOD, output_dir=OUTPUT_DIR, cfg=cfg, hparam=hparam, seed=seed,
