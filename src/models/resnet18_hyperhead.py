@@ -340,6 +340,127 @@ class ResNet18HyperHeadAge(nn.Module):
         return logits
 
 
+class SkinHyperHeadNet(nn.Module):
+    """
+    HyperHeadNet 的单属性版：只用 skin (Fitzpatrick I–VI → 0–5) 一个敏感属性生成主干分类头
+    的逐样本参数。结构与 AgeHyperHeadNet 完全对齐 (单 embedding → 小 MLP → 展平 fc 权重+偏置、
+    末层近零初始化)，仅把 age embedding 换成 6 类 skin embedding。
+
+    为什么用 HyperHead 做 Fitzpatrick：HyperHead「在共享 φ(X) 上按属性生成逐样本线性头」是
+    最浅的属性介入 HN，与 HyperFusion (单点深层)、HyperAdapt (每层低秩) 构成注入深度对照轴。
+    注：Fitzpatrick 条件互信息 I(Y;skin|X)≈0 (作业 67913)，据核心论点 HN 在此注定无收益，
+    本脚本产出的是「信号缺失处的 null result」对照，与 HAM-age (信号处) 并列解释。
+
+    Args:
+        in_dim    : 主干分类头输入维度 (ResNet-18 = 512)。
+        out_dim   : 主干分类头输出维度 (malignant 二分类 = 1)。
+        num_skin  : skin 类别数 (Fitzpatrick I–VI = 6)。
+        skin_embed: skin embedding 维度。
+        hidden_dim: HyperNet 内部 MLP 隐藏层维度。
+        init_std  : 末层权重初始尺度 (近零起步，使初始 logit≈0、各样本几乎一致)。
+    """
+
+    def __init__(
+        self,
+        in_dim: int = 512,
+        out_dim: int = 1,
+        num_skin: int = 6,
+        skin_embed: int = 4,
+        hidden_dim: int = 64,
+        init_std: float = 1e-3,
+    ) -> None:
+        super().__init__()
+        self.in_dim = in_dim
+        self.out_dim = out_dim
+        self.init_std = init_std
+
+        self.skin_emb = nn.Embedding(num_skin, skin_embed)
+
+        weight_numel = in_dim * out_dim   # 展平后的 fc 权重元素数 (512*1)
+        bias_numel = out_dim              # fc 偏置元素数 (1)
+        self.mlp = nn.Sequential(
+            nn.Linear(skin_embed, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_dim, weight_numel + bias_numel),
+        )
+        self._init_weights()
+
+    def _init_weights(self) -> None:
+        """末层近零 + 零偏置：初期生成头≈0、logit≈0、各样本几乎一致 (与 AgeHyperHeadNet 同理)。"""
+        nn.init.normal_(self.mlp[-1].weight, mean=0.0, std=self.init_std)
+        nn.init.zeros_(self.mlp[-1].bias)
+
+    def forward(self, skin: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """skin: [B] long (0–5) → (weight [B, out_dim, in_dim], bias [B, out_dim])。"""
+        a = self.skin_emb(skin)                # [B, skin_embed]
+        out = self.mlp(a)                      # [B, in_dim*out_dim + out_dim]
+        weight = out[:, : self.in_dim * self.out_dim].view(-1, self.out_dim, self.in_dim)
+        bias = out[:, self.in_dim * self.out_dim :]
+        return weight, bias
+
+
+# ============================================================
+# ResNet-18 + HyperHead for Fitzpatrick17k (单一 skin 属性)
+# ============================================================
+class ResNet18HyperHeadSkin(nn.Module):
+    """
+    Fitzpatrick17k 版 HyperHead: backbone 与 baseline 完全一致 (ImageNet 预训练 torchvision
+    ResNet-18, fc→Identity, 输出 512 维特征)，分类头由 SkinHyperHeadNet 依据单一肤色 skin
+    逐样本生成。与 ResNet18HyperHeadAge 同构，仅条件属性由 age 换成 skin。
+
+    forward 签名 (image, skin)，与 FitzpatrickDataset 的 (image, label, skin) 对齐。
+
+    Args:
+        num_classes : 分类头输出维度 (malignant 二分类 → 1)。
+        num_skin    : skin 有效类别数 (Fitzpatrick I–VI = 6)。
+        skin_embed  : skin embedding 维度。
+        hyper_hidden: HyperNet 内部 MLP 隐藏层维度。
+        init_std    : 末层近零初始尺度 (与 baseline 起步稳定一致)。
+    """
+
+    def __init__(
+        self,
+        num_classes: int = 1,
+        num_skin: int = 6,
+        skin_embed: int = 4,
+        hyper_hidden: int = 64,
+        init_std: float = 1e-3,
+    ) -> None:
+        super().__init__()
+        # backbone 与 baseline 完全一致 (与 ResNet18HyperHeadAge 同构)
+        self.backbone = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
+        self.feat_dim = self.backbone.fc.in_features   # 512
+        self.backbone.fc = nn.Identity()
+
+        # 单属性 skin HyperNet 取代原 fc
+        self.hyper = SkinHyperHeadNet(
+            in_dim=self.feat_dim,
+            out_dim=num_classes,
+            num_skin=num_skin,
+            skin_embed=skin_embed,
+            hidden_dim=hyper_hidden,
+            init_std=init_std,
+        )
+
+    def extract_features(self, image: torch.Tensor) -> torch.Tensor:
+        """只跑 backbone，返回 [B, feat_dim] 特征 (fc 之前)。"""
+        return self.backbone(image)
+
+    def forward(self, image: torch.Tensor, skin: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            image: [B, 3, 224, 224] 皮肤镜 RGB 图像。
+            skin : [B] long，0–5 (6 肤色型)。
+
+        Returns:
+            logits: [B, num_classes]。
+        """
+        feat = self.extract_features(image)            # [B, 512]
+        weight, bias = self.hyper(skin)                # [B, C, 512], [B, C]
+        logits = torch.bmm(weight, feat.unsqueeze(-1)).squeeze(-1) + bias  # [B, C]
+        return logits
+
+
 # ============================================================
 # 结构自检
 # ============================================================

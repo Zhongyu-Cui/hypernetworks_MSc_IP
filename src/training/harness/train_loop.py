@@ -39,8 +39,13 @@ from sklearn.metrics import roc_auc_score
 from torch.utils.data import DataLoader
 
 from src.training.harness.hparam_grid import HParamConfig
-from src.training.harness.run import checkpoint_path, seed_everything  # noqa: F401 (seed_everything re-export)
+from src.training.harness.predictions import default_prediction_path, save_predictions, val_prediction_path
+from src.training.harness.run import checkpoint_path, run_id, seed_everything  # noqa: F401 (seed_everything re-export)
 from src.training.harness.subgroup_auc import subgroup_auc_vector, vector_worst_case
+from src.training.harness.swad import (
+    DEFAULT_N_CONVERGE, DEFAULT_N_TOLERANCE, DEFAULT_TOLERANCE_RATIO,
+    swad_average_over_interval,
+)
 from src.training.harness.val_log import (
     append_val_record, default_val_log_path, record_from_vector,
 )
@@ -76,6 +81,12 @@ def unpack_sex_race_age(batch: Batch) -> tuple[torch.Tensor, torch.Tensor, Attrs
     return images, labels, {"sex": sex, "race": race, "age": age}
 
 
+def unpack_asyn(batch: Batch) -> tuple[torch.Tensor, torch.Tensor, Attrs]:
+    """MIMIC-synth（R1）：loader 返回 (image, label, a_syn) → attrs={a_syn}。"""
+    images, labels, a_syn = batch
+    return images, labels, {"a_syn": a_syn}
+
+
 # ============================================================
 # 通用 forward 回调（依方法：模型吃哪些属性）
 # ============================================================
@@ -103,6 +114,11 @@ def forward_sex_race_age(model: nn.Module, images: torch.Tensor, attrs: Attrs) -
         attrs["race"].to(d, non_blocking=True),
         attrs["age"].to(d, non_blocking=True),
     )
+
+
+def forward_asyn(model: nn.Module, images: torch.Tensor, attrs: Attrs) -> torch.Tensor:
+    """MIMIC-synth HN（R1）：model(image, a_syn)（单一二值合成属性通路，复用 *Age(num_age=2)）。"""
+    return model(images, attrs["a_syn"].to(images.device, non_blocking=True))
 
 
 # ============================================================
@@ -226,8 +242,8 @@ def evaluate_checkpoint(
     forward_fn: ForwardFn,
     fairness_report_fn: FairnessReportFn,
     label: str,
-) -> None:
-    """加载 checkpoint，在测试集评估并打印整体指标 + 数据集特有的分组公平性报告。"""
+) -> EvalResult:
+    """加载 checkpoint，在测试集评估并打印整体指标 + 数据集特有的分组公平性报告；返回 EvalResult（供落盘预测）。"""
     print(f"\n{'#' * 70}\n# Evaluating checkpoint: {label} ({ckpt_path.name})\n{'#' * 70}")
     model.load_state_dict(torch.load(ckpt_path, map_location=DEVICE, weights_only=True))
     er = evaluate(model, test_loader, criterion, dataset, unpack_fn, forward_fn)
@@ -236,6 +252,94 @@ def evaluate_checkpoint(
           f"Worst-case AUC={wc_str}")
     # 阈值 0：logits>0 判正类（与各脚本一致，CheXpert 等极不均衡数据 acc 无意义、AUC 为主指标）
     fairness_report_fn(er.labels, er.logits, er.attrs)
+    return er
+
+
+# ============================================================
+# SWAD 收尾（比较协议 A3.2）：从 ERM 训练派生权重平均模型并评估
+# ============================================================
+@torch.no_grad()
+def _finalize_swad(
+    *,
+    model: nn.Module,
+    val_losses: list[float],
+    state_dicts: list[dict[str, torch.Tensor]],
+    output_dir: Path,
+    config_tag: str,
+    seed: int,
+    dataset: str,
+    cfg: dict,
+    criterion: nn.Module,
+    val_loader: DataLoader,
+    test_loader: DataLoader,
+    unpack_fn: UnpackFn,
+    forward_fn: ForwardFn,
+    fairness_report_fn: FairnessReportFn,
+    n_converge: int,
+    n_tolerance: int,
+    tolerance_ratio: float,
+) -> dict:
+    """
+    A3.2：把逐 epoch 收集的 (val_loss, state_dict) 做 SWAD loss-valley 权重平均，落盘并在
+    val/test 评估。SWAD 是 ERM 的**派生**基线（method="swad"，同 config/seed），产出单一平均模型。
+
+    命名：checkpoint 与 val 日志以 run_id("swad", config_tag, seed) 为基名，与 ERM 区分开，
+    供 A1/A2 / D 阶段按 method="swad" 寻址。写一条 val 记录（epoch = 平均区间末 epoch 的 1-based 值）
+    承载平均模型的验证集完整子群向量。
+
+    Returns:
+        {swad_ckpt, swad_val_log, swad_interval:(t_s,t_e,n_averaged), swad_val_overall_auc, swad_val_wc_auc}。
+    """
+    print(f"\n{'#' * 70}\n# SWAD 权重平均（派生自 ERM，method=swad）\n{'#' * 70}")
+    averaged_sd, interval = swad_average_over_interval(
+        val_losses, state_dicts,
+        n_converge=n_converge, n_tolerance=n_tolerance, tolerance_ratio=tolerance_ratio,
+    )
+    # 区间 0-based → 报告用 1-based epoch（与训练打印一致）
+    print(f"loss valley 区间: epoch {interval.t_s + 1}..{interval.t_e + 1} "
+          f"(共 {interval.n_averaged} 个，L_min={interval.l_min:.4f}, thr={interval.threshold:.4f})")
+
+    swad_rid = run_id("swad", config_tag, seed)
+    swad_ckpt = output_dir / f"{swad_rid}_averaged.pth"
+    torch.save(averaged_sd, swad_ckpt)
+    print(f"已保存 SWAD 平均权重: {swad_ckpt.name}")
+
+    # 把平均权重载入模型副本评估（不污染主 model 的 device 状态）
+    model.load_state_dict(averaged_sd)
+    # --- 验证集：写一条 val 记录（承载平均模型的子群向量）---
+    er_val = evaluate(model, val_loader, criterion, dataset, unpack_fn, forward_fn)
+    swad_log = default_val_log_path(output_dir, "swad", config_tag, seed)
+    if swad_log.exists():
+        swad_log.unlink()
+    rec = record_from_vector(
+        er_val.vector, dataset=dataset, method="swad", config_tag=config_tag,
+        lr=cfg["training"].get("learning_rate", 0.0), wd=cfg["training"].get("weight_decay", 0.0),
+        seed=seed, epoch=interval.t_e + 1, overall_auc=er_val.overall_auc,
+    )
+    append_val_record(swad_log, rec)
+    wc_str = f"{er_val.wc_auc:.4f}" if er_val.wc_auc is not None else "N/A"
+    print(f"SWAD val: AUC={er_val.overall_auc:.4f} worst-case AUC={wc_str}")
+
+    # --- 测试集：完整指标 + 分组公平性报告 + 落盘逐样本预测（method="swad"）---
+    er_test = evaluate(model, test_loader, criterion, dataset, unpack_fn, forward_fn)
+    wc_test = f"{er_test.wc_auc:.4f}" if er_test.wc_auc is not None else "N/A"
+    print(f"\n{'#' * 70}\n# Evaluating SWAD averaged model (test)\n{'#' * 70}")
+    print(f"Test loss={er_test.loss:.4f}  accuracy={er_test.acc:.2f}%  AUC={er_test.overall_auc:.4f}  "
+          f"Worst-case AUC={wc_test}")
+    fairness_report_fn(er_test.labels, er_test.logits, er_test.attrs)
+    # SWAD 是单一平均模型（无 overall/worstcase 之分）：预测存到 "overall" 槽（唯一 selection）
+    swad_pred = default_prediction_path(output_dir, "swad", config_tag, seed, "overall")
+    save_predictions(swad_pred, er_test.labels, er_test.logits, er_test.attrs)
+    print(f"已落盘 SWAD test 预测: {swad_pred.name}")
+
+    return {
+        "swad_ckpt": str(swad_ckpt),
+        "swad_val_log": str(swad_log),
+        "swad_pred": str(swad_pred),
+        "swad_interval": (interval.t_s + 1, interval.t_e + 1, interval.n_averaged),
+        "swad_val_overall_auc": float(er_val.overall_auc),
+        "swad_val_wc_auc": (None if er_val.wc_auc is None else float(er_val.wc_auc)),
+    }
 
 
 # ============================================================
@@ -256,6 +360,10 @@ def run_training(
     unpack_fn: UnpackFn,
     forward_fn: ForwardFn,
     fairness_report_fn: FairnessReportFn,
+    swad: bool = False,
+    swad_n_converge: int = DEFAULT_N_CONVERGE,
+    swad_n_tolerance: int = DEFAULT_N_TOLERANCE,
+    swad_tolerance_ratio: float = DEFAULT_TOLERANCE_RATIO,
 ) -> dict:
     """
     统一训练编排：AdamW(lr,wd 来自 hparam) + BCEWithLogitsLoss + grad_clip，逐 epoch 评估、
@@ -281,10 +389,16 @@ def run_training(
         train/val/test_loader: 已构建好的 DataLoader（含 transforms / 过滤 / 重采样）。
         build_model: 无参工厂，返回未搬到 device 的模型（本函数负责 .to(DEVICE)）。
         unpack_fn / forward_fn / fairness_report_fn: 见模块 docstring。
+        swad: 是否额外派生 SWAD 权重平均模型（比较协议 A3.2）。为 True 时逐 epoch 缓存 CPU 权重，
+            训练后做 loss-valley 平均并在 val/test 评估。**仅对 ERM 有意义**（协议：SWAD 套在 ERM 上、
+            不与 HN 组合），method != "erm" 时会打印警告但仍执行。默认 False（HN / 搜索阶段不开销）。
+        swad_n_converge / swad_n_tolerance / swad_tolerance_ratio: SWAD 超参（见 harness/swad.py）。
 
     Returns:
         summary dict：{best_val_overall_auc, best_val_wc_auc, best_overall_epoch,
-                       best_worstcase_epoch, val_log_path, ckpt_overall, ckpt_worstcase}。
+                       best_worstcase_epoch, val_log_path, ckpt_overall, ckpt_worstcase}；
+                      swad=True 时额外含 {swad_ckpt, swad_val_log, swad_interval,
+                       swad_val_overall_auc, swad_val_wc_auc}。
     """
     train_cfg = cfg["training"]
     es_cfg = cfg["early_stopping"]
@@ -326,6 +440,12 @@ def run_training(
     patience = es_cfg["patience"]
     min_delta = es_cfg["min_delta"]
 
+    # SWAD（A3.2）：逐 epoch 缓存 (val_loss, CPU state_dict) 供训练后 loss-valley 权重平均
+    if swad and method != "erm":
+        print(f"⚠️  swad=True 但 method={method!r}（非 erm）：SWAD 协议上仅套在 ERM 上，仍照常执行。")
+    swad_val_losses: list[float] = []
+    swad_state_dicts: list[dict[str, torch.Tensor]] = []
+
     print(f"\nTraining for up to {max_epochs} epochs (early stopping enabled)...\n" + "=" * 70)
     for epoch in range(1, max_epochs + 1):
         t0 = time.time()
@@ -342,6 +462,13 @@ def run_training(
             lr=hparam.lr, wd=hparam.wd, seed=seed, epoch=epoch, overall_auc=er.overall_auc,
         )
         append_val_record(log_path, rec)
+
+        # SWAD：缓存本 epoch 的 val loss 与 CPU 权重快照（放 CPU 避免占 GPU 显存）
+        if swad:
+            swad_val_losses.append(er.loss)
+            swad_state_dicts.append(
+                {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+            )
 
         wc_val = er.wc_auc if er.wc_auc is not None else -np.inf
         wc_str = f"{er.wc_auc:.4f}" if er.wc_auc is not None else "N/A"
@@ -375,13 +502,27 @@ def run_training(
                 break
         print("-" * 70)
 
-    # --- 两种 model selection 策略的最优 checkpoint 在测试集上评估 ---
-    evaluate_checkpoint(model, ckpt_overall, test_loader, criterion, dataset,
-                        unpack_fn, forward_fn, fairness_report_fn, label="Overall AUC selection")
-    evaluate_checkpoint(model, ckpt_worstcase, test_loader, criterion, dataset,
-                        unpack_fn, forward_fn, fairness_report_fn, label="Worst-case AUC selection")
+    # --- 两种 model selection 策略的最优 checkpoint 在测试集上评估 + 落盘逐样本预测（供 A2/A4/A5/D）---
+    er_overall = evaluate_checkpoint(model, ckpt_overall, test_loader, criterion, dataset,
+                                     unpack_fn, forward_fn, fairness_report_fn, label="Overall AUC selection")
+    er_worstcase = evaluate_checkpoint(model, ckpt_worstcase, test_loader, criterion, dataset,
+                                       unpack_fn, forward_fn, fairness_report_fn, label="Worst-case AUC selection")
+    pred_overall = default_prediction_path(output_dir, method, hparam.tag, seed, "overall")
+    pred_worstcase = default_prediction_path(output_dir, method, hparam.tag, seed, "worstcase")
+    save_predictions(pred_overall, er_overall.labels, er_overall.logits, er_overall.attrs)
+    save_predictions(pred_worstcase, er_worstcase.labels, er_worstcase.logits, er_worstcase.attrs)
+    print(f"已落盘 test 预测: {pred_overall.name} / {pred_worstcase.name}")
 
-    return {
+    # ROC 后处理（A4 / C*.8）需 val 预测定 deprived 子群与选 margin θ：用 overall-selection
+    # checkpoint 在 val 集落盘一份 val 预测（selection="val_overall"），使 ROC 派生保持数据集无关。
+    er_val_overall = evaluate_checkpoint(model, ckpt_overall, val_loader, criterion, dataset,
+                                         unpack_fn, forward_fn, fairness_report_fn,
+                                         label="[val] Overall AUC selection")
+    pred_val_overall = val_prediction_path(output_dir, method, hparam.tag, seed)
+    save_predictions(pred_val_overall, er_val_overall.labels, er_val_overall.logits, er_val_overall.attrs)
+    print(f"已落盘 val 预测（供 ROC）: {pred_val_overall.name}")
+
+    summary = {
         "best_val_overall_auc": float(best_val_auc),
         "best_val_wc_auc": (None if best_val_wc_auc == -np.inf else float(best_val_wc_auc)),
         "best_overall_epoch": best_overall_epoch,
@@ -389,4 +530,20 @@ def run_training(
         "val_log_path": str(log_path),
         "ckpt_overall": str(ckpt_overall),
         "ckpt_worstcase": str(ckpt_worstcase),
+        "pred_overall": str(pred_overall),
+        "pred_worstcase": str(pred_worstcase),
+        "pred_val_overall": str(pred_val_overall),
     }
+
+    # --- SWAD 派生（A3.2）：loss-valley 权重平均 + val/test 评估 ---
+    if swad:
+        summary.update(_finalize_swad(
+            model=model, val_losses=swad_val_losses, state_dicts=swad_state_dicts,
+            output_dir=output_dir, config_tag=hparam.tag, seed=seed, dataset=dataset, cfg=cfg,
+            criterion=criterion, val_loader=val_loader, test_loader=test_loader,
+            unpack_fn=unpack_fn, forward_fn=forward_fn, fairness_report_fn=fairness_report_fn,
+            n_converge=swad_n_converge, n_tolerance=swad_n_tolerance,
+            tolerance_ratio=swad_tolerance_ratio,
+        ))
+
+    return summary

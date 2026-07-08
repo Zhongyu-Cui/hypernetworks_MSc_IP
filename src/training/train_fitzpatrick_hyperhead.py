@@ -1,15 +1,18 @@
 """
-Train ResNet18 on Fitzpatrick17k for Malignant Binary Classification (Image-only, ERM)
-======================================================================================
-仅以皮肤镜 RGB 图像作为输入（不引入肤色），预测 malignant（0=benign/non-neoplastic, 1=malignant；
-恶性占比约 13.5%）。敏感属性为单一肤色轴 skin（Fitzpatrick I–VI → 0–5）。preproc_224x224 已是
-自然 RGB 且尺寸即 224，无需 Grayscale/Resize，训练增强保留水平翻转（皮损无左右约束）。
+Train ResNet18-HyperHead on Fitzpatrick17k (malignant, skin-conditioned)
+========================================================================
+在 image-only baseline 基础上，仅让**分类头**由**单一敏感属性 skin**（Fitzpatrick I–VI → 0–5）
+经超网络逐样本生成（ResNet18HyperHeadSkin，末层近零初始、起步等价统一头），backbone 与 baseline
+共享。HyperHead 是「最浅」HN（只改 fc），与 HyperFusion（单点深层）、HyperAdapt（每层低秩）构成
+注入深度对照。注：Fitzpatrick 条件互信息 I(Y;skin|X)≈0（作业 67913），据核心论点 HN 在此注定无
+收益，本脚本产出「信号缺失处的 null result」对照。
 
 **比较协议改造（A0.4）**：训练循环统一走 harness.run_training；本脚本保留 Fitzpatrick 特有的
-transforms / dataloader（含可选重采样），注入 unpack_skin + forward_image_only +
-print_fitzpatrick_fairness_report。超参 lr/wd 由 --config_index 从网格取（缺省 index=2=中心点）。
+transforms / dataloader，注入 unpack_skin + forward_skin + print_fitzpatrick_fairness_report。
+超参 lr/wd 由 --config_index 从网格取（缺省 index=2=中心点）。HyperHead 只改 fc、显存与 baseline
+一致，用原 batch_size=128。
 
-运行方式：重型任务，经 sbatch 提交（见 slurm/train_fitzpatrick_resnet18.sh）。
+运行方式：重型任务，经 sbatch 提交（见 slurm/train_fitzpatrick_hyperhead.sh）。
 """
 
 import argparse
@@ -20,19 +23,19 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 
 from src.datasets.fitzpatrick_dataset import FitzpatrickDataset
-from src.models.resnet18_pretrained import ResNet18Pretrained
+from src.models.resnet18_hyperhead import ResNet18HyperHeadSkin
 from src.training.harness.hparam_grid import get_hparam_config, grid_size
 from src.training.harness.run import seed_everything
-from src.training.harness.train_loop import forward_image_only, run_training, unpack_skin
+from src.training.harness.train_loop import forward_skin, run_training, unpack_skin
 from src.utils.fitzpatrick_fairness import print_fitzpatrick_fairness_report
-from src.utils.resampling import build_group_label_sampler
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = REPO_ROOT / "configs" / "fitzpatrick_baseline.yaml"
 OUTPUT_DIR = Path("/vol/biomedic2/bglocker_studproj/zc125/outputs/fitzpatrick")
 
 DATASET = "fitzpatrick"
-METHOD = "erm"
+METHOD = "hyperhead"
+NUM_SKIN = 6   # Fitzpatrick 肤色 I–VI → 0..5
 
 
 def load_config(path: Path) -> dict:
@@ -42,25 +45,19 @@ def load_config(path: Path) -> dict:
 
 
 def parse_args() -> argparse.Namespace:
-    """解析命令行参数（--config_index 超参网格；--seed；--resample_alpha 肤色×标签平衡重采样）。"""
-    parser = argparse.ArgumentParser(description="Train ResNet18 on Fitzpatrick17k (malignant, image-only, ERM)")
+    """解析命令行参数（--config_index 超参网格；--seed；--batch_size 可选覆盖）。"""
+    parser = argparse.ArgumentParser(description="Train ResNet18-HyperHead on Fitzpatrick17k (skin-conditioned)")
     parser.add_argument("--config_index", type=int, default=2,
                         help=f"超参网格配置序号 0–{grid_size() - 1}；缺省 2=中心点 (lr=1e-4, wd=1e-4)。")
     parser.add_argument("--seed", type=int, default=None,
                         help="随机种子；缺省取 fitzpatrick_baseline.yaml 的 training.seeds[0]")
-    parser.add_argument("--resample_alpha", type=float, default=None,
-                        help="skin×label 平衡重采样强度 ∈[0,1]（0=自然分布，1=完全平衡）；缺省不重采样。")
-    parser.add_argument("--swad", action="store_true",
-                        help="开启 SWAD 权重平均派生（协议 C*.7）：逐 epoch 缓存 CPU 权重，训练末在 loss "
-                             "谷区间平均，额外产出 method=swad 的 checkpoint / val 日志，与 ERM 同 config/seed。")
+    parser.add_argument("--batch_size", type=int, default=None,
+                        help="覆盖 config 的 batch_size；HyperHead 只改 fc、显存同 baseline，通常无需。")
     return parser.parse_args()
 
 
 def build_transforms(cfg: dict) -> tuple[transforms.Compose, transforms.Compose]:
-    """
-    构建训练 / 评估 transform。Fitzpatrick preproc_224x224 已是 224 原生 RGB，无需 Grayscale/Resize；
-    训练保留水平翻转（皮损无左右约束）+ 旋转；评估不做几何增强。
-    """
+    """构建训练 / 评估 transform（与 Fitzpatrick baseline 一致；224 原生，翻转+旋转，无 Resize）。"""
     t_cfg = cfg["transforms"]
     norm_mean, norm_std = t_cfg["normalize"]["mean"], t_cfg["normalize"]["std"]
 
@@ -79,12 +76,9 @@ def build_transforms(cfg: dict) -> tuple[transforms.Compose, transforms.Compose]
 
 
 def get_dataloaders(
-    cfg: dict,
-    train_transform: transforms.Compose,
-    eval_transform: transforms.Compose,
-    resample_alpha: float | None = None,
+    cfg: dict, train_transform: transforms.Compose, eval_transform: transforms.Compose,
 ) -> tuple[DataLoader, DataLoader, DataLoader]:
-    """构建 train / val / test DataLoader（split 已图像级划分；val/test 保持真实分布）。"""
+    """构建 train / val / test DataLoader（split 已图像级划分；val/test 保持真实分布，HN 不重采样）。"""
     split_dir = REPO_ROOT / cfg["data"]["split_dir"]
     batch_size = cfg["training"]["batch_size"]
     num_workers = cfg["dataloader"]["num_workers"]
@@ -94,15 +88,8 @@ def get_dataloaders(
     val_set = FitzpatrickDataset(split_dir / "val.csv", transform=eval_transform)
     test_set = FitzpatrickDataset(split_dir / "test.csv", transform=eval_transform)
 
-    if resample_alpha is None:
-        train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True,
-                                  num_workers=num_workers, pin_memory=pin_memory)
-    else:
-        sampler = build_group_label_sampler(
-            train_set, dims=cfg["resampling"]["dims"], alpha=resample_alpha, verbose=True,
-        )
-        train_loader = DataLoader(train_set, batch_size=batch_size, sampler=sampler,
-                                  num_workers=num_workers, pin_memory=pin_memory)
+    train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True,
+                              num_workers=num_workers, pin_memory=pin_memory)
     val_loader = DataLoader(val_set, batch_size=batch_size, shuffle=False,
                             num_workers=num_workers, pin_memory=pin_memory)
     test_loader = DataLoader(test_set, batch_size=batch_size, shuffle=False,
@@ -120,30 +107,22 @@ def _fairness_report(y_true, y_score, attrs) -> None:
 def main() -> None:
     args = parse_args()
     cfg = load_config(CONFIG_PATH)
+    if args.batch_size is not None:
+        cfg["training"]["batch_size"] = args.batch_size
     seed = args.seed if args.seed is not None else cfg["training"]["seeds"][0]
     hparam = get_hparam_config(args.config_index)
 
-    resample_alpha = args.resample_alpha
-    if resample_alpha is None and cfg.get("resampling", {}).get("enabled", False):
-        resample_alpha = cfg["resampling"]["alpha"]
-
     seed_everything(seed)
-    print(f"Loading Fitzpatrick17k (malignant, image-only ERM)  "
-          f"resample={'OFF' if resample_alpha is None else resample_alpha}...")
+    print("Loading Fitzpatrick17k (malignant, skin-conditioned HyperHead)...")
     train_transform, eval_transform = build_transforms(cfg)
-    train_loader, val_loader, test_loader = get_dataloaders(
-        cfg, train_transform, eval_transform, resample_alpha=resample_alpha,
-    )
-    print(f"  Train: {len(train_loader.dataset):,} | Val: {len(val_loader.dataset):,} | "
-          f"Test: {len(test_loader.dataset):,}")
+    train_loader, val_loader, test_loader = get_dataloaders(cfg, train_transform, eval_transform)
 
     run_training(
         dataset=DATASET, method=METHOD, output_dir=OUTPUT_DIR, cfg=cfg, hparam=hparam, seed=seed,
         train_loader=train_loader, val_loader=val_loader, test_loader=test_loader,
-        build_model=lambda: ResNet18Pretrained(num_classes=1),
-        unpack_fn=unpack_skin, forward_fn=forward_image_only,
+        build_model=lambda: ResNet18HyperHeadSkin(num_classes=1, num_skin=NUM_SKIN),
+        unpack_fn=unpack_skin, forward_fn=forward_skin,
         fairness_report_fn=_fairness_report,
-        swad=args.swad,
     )
 
 

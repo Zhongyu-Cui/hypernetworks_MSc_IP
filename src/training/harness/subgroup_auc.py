@@ -46,13 +46,18 @@ from src.utils.papila_fairness import (
     PAPILA_SEX_NAMES, PAPILA_AGE_NAMES,
     worst_case_auc as papila_worst_case_auc,
 )
+from src.utils.synthetic_fairness import (
+    worst_case_auc as synth_worst_case_auc,
+)
+from src.datasets.synthetic_attribute import SYNTH_ATTR_NAMES
 
-# mimic / chexpert 共享同一 fairness 口径（CheXpert 复用 MIMIC 模块）
-DATASETS: tuple[str, ...] = ("mimic", "chexpert", "ham10000", "fitzpatrick", "papila")
+# mimic / chexpert 共享同一 fairness 口径（CheXpert 复用 MIMIC 模块）；
+# mimic_synth = R1 合成信号剂量-反应实验（子群 = 注入的 A_syn 两组）
+DATASETS: tuple[str, ...] = ("mimic", "chexpert", "ham10000", "fitzpatrick", "papila", "mimic_synth")
 
 # 每个数据集子群向量的固定维度（供 val_log / Pareto 侧断言对齐）
 SUBGROUP_VECTOR_DIM: dict[str, int] = {
-    "mimic": 14, "chexpert": 14, "ham10000": 14, "fitzpatrick": 6, "papila": 8,
+    "mimic": 14, "chexpert": 14, "ham10000": 14, "fitzpatrick": 6, "papila": 8, "mimic_synth": 2,
 }
 
 
@@ -79,31 +84,144 @@ def _as_arrays(
     return np.asarray(y_true).astype(int), np.asarray(y_score).astype(float)
 
 
+# ============================================================
+# 子群掩码枚举（schema 单一事实来源）：subgroup_auc_vector 与
+# operating_point_fairness 均消费同一批 (键, 布尔掩码)，避免子群定义漂移。
+# ============================================================
+def _mimic_masks(
+    sex: np.ndarray, race: np.ndarray, age: np.ndarray,
+) -> "OrderedDict[str, np.ndarray]":
+    """MIMIC / CheXpert 子群掩码：Sex/Race/Age 边缘 + Sex×Race×Age 三阶交叉（14 项）。"""
+    sex = np.asarray(sex).astype(int)
+    race = np.asarray(race).astype(int)
+    age = np.asarray(age).astype(int)
+    masks: "OrderedDict[str, np.ndarray]" = OrderedDict()
+    # 边缘轴（固定枚举 name 字典的键，不依赖数据取值）
+    for s, sname in MIMIC_SEX_NAMES.items():
+        masks[f"sex:{sname}"] = sex == s
+    for r, rname in MIMIC_RACE_NAMES.items():
+        masks[f"race:{rname}"] = race == r
+    for a, aname in MIMIC_AGE_NAMES.items():
+        masks[f"age:{aname}"] = age == a
+    # Sex×Race×Age 三阶交叉（8 项，与 worst_case_auc 的交叉口径一致）
+    for s, sname in MIMIC_SEX_NAMES.items():
+        for r, rname in MIMIC_RACE_NAMES.items():
+            for a, aname in MIMIC_AGE_NAMES.items():
+                masks[f"sex:{sname}|race:{rname}|age:{aname}"] = (
+                    (sex == s) & (race == r) & (age == a)
+                )
+    return masks
+
+
+def _ham_masks(sex: np.ndarray, age_group: np.ndarray) -> "OrderedDict[str, np.ndarray]":
+    """HAM10000 子群掩码：Sex 边缘(含 age=-1) + Age 边缘(排 -1) + Sex×Age(排 -1)，14 项。"""
+    sex = np.asarray(sex).astype(int)
+    age_group = np.asarray(age_group).astype(int)
+    masks: "OrderedDict[str, np.ndarray]" = OrderedDict()
+    # Sex 边缘：与 worst_case_auc 一致，使用全部样本（含 age_group==-1）
+    for s, sname in HAM_SEX_NAMES.items():
+        masks[f"sex:{sname}"] = sex == s
+    # Age 边缘：仅 age_group∈{0..3}（HAM_AGE_NAMES 不含 -1，排除组）
+    for a, aname in HAM_AGE_NAMES.items():
+        masks[f"age:{aname}"] = age_group == a
+    # Sex×Age 交叉（8 项，age 取 0..3，隐式排除 -1）
+    for s, sname in HAM_SEX_NAMES.items():
+        for a, aname in HAM_AGE_NAMES.items():
+            masks[f"sex:{sname}|age:{aname}"] = (sex == s) & (age_group == a)
+    return masks
+
+
+def _fitzpatrick_masks(skin: np.ndarray) -> "OrderedDict[str, np.ndarray]":
+    """Fitzpatrick17k 子群掩码：6 个肤色子群（型 I–VI）。"""
+    skin = np.asarray(skin).astype(int)
+    masks: "OrderedDict[str, np.ndarray]" = OrderedDict()
+    for k, kname in FITZ_SKIN_NAMES.items():
+        masks[f"skin:{kname}"] = skin == k
+    return masks
+
+
+def _papila_masks(sex: np.ndarray, age_group: np.ndarray) -> "OrderedDict[str, np.ndarray]":
+    """PAPILA 子群掩码：Sex(2)+Age(2) 边缘 + Sex×Age(4) 交叉，8 项。"""
+    sex = np.asarray(sex).astype(int)
+    age_group = np.asarray(age_group).astype(int)
+    masks: "OrderedDict[str, np.ndarray]" = OrderedDict()
+    for s, sname in PAPILA_SEX_NAMES.items():
+        masks[f"sex:{sname}"] = sex == s
+    for a, aname in PAPILA_AGE_NAMES.items():
+        masks[f"age:{aname}"] = age_group == a
+    for s, sname in PAPILA_SEX_NAMES.items():
+        for a, aname in PAPILA_AGE_NAMES.items():
+            masks[f"sex:{sname}|age:{aname}"] = (sex == s) & (age_group == a)
+    return masks
+
+
+def _synth_masks(a_syn: np.ndarray) -> "OrderedDict[str, np.ndarray]":
+    """mimic_synth（R1 合成信号）子群掩码：A_syn 两组（Asyn=0 / Asyn=1）。"""
+    a_syn = np.asarray(a_syn).astype(int)
+    masks: "OrderedDict[str, np.ndarray]" = OrderedDict()
+    for g, gname in SYNTH_ATTR_NAMES.items():
+        masks[f"a_syn:{gname}"] = a_syn == g
+    return masks
+
+
+def subgroup_masks(
+    dataset: str,
+    *,
+    sex: np.ndarray | None = None,
+    race: np.ndarray | None = None,
+    age: np.ndarray | None = None,
+    skin: np.ndarray | None = None,
+    a_syn: np.ndarray | None = None,
+) -> "OrderedDict[str, np.ndarray]":
+    """
+    给定数据集的**固定 schema 子群布尔掩码字典**（键顺序与 `subgroup_auc_vector` 完全一致）。
+
+    这是子群集合的单一事实来源：`subgroup_auc_vector`（AUC）与 `operating_point_fairness`
+    （TPR/FPR/EqOdds）均消费本函数，杜绝两处子群定义漂移。
+
+    Args:
+        dataset: {"mimic","chexpert","ham10000","fitzpatrick","papila","mimic_synth"} 之一。
+        sex/race/age/skin/a_syn: 各数据集所需敏感属性数组（按数据集取用，同 subgroup_auc_vector）。
+
+    Returns:
+        OrderedDict[子群键 -> [N] 布尔掩码]。
+
+    Raises:
+        ValueError: dataset 不识别，或所需属性缺失。
+    """
+    def _require(name: str, arr: np.ndarray | None) -> np.ndarray:
+        if arr is None:
+            raise ValueError(f"数据集 {dataset!r} 需要属性 {name!r}，但未提供。")
+        return arr
+
+    if dataset in ("mimic", "chexpert"):
+        return _mimic_masks(_require("sex", sex), _require("race", race), _require("age", age))
+    if dataset == "ham10000":
+        return _ham_masks(_require("sex", sex), _require("age", age))
+    if dataset == "fitzpatrick":
+        return _fitzpatrick_masks(_require("skin", skin))
+    if dataset == "papila":
+        return _papila_masks(_require("sex", sex), _require("age", age))
+    if dataset == "mimic_synth":
+        return _synth_masks(_require("a_syn", a_syn))
+    raise ValueError(f"未知数据集 {dataset!r}，合法取值：{DATASETS}")
+
+
+def _vector_from_masks(
+    y_true: np.ndarray, y_score: np.ndarray,
+    masks: "OrderedDict[str, np.ndarray]",
+) -> "OrderedDict[str, tuple[float | None, int]]":
+    """把子群掩码字典映射为 (AUC, n) 向量（每个掩码 → _auc_n）。"""
+    y_true, y_score = _as_arrays(y_true, y_score)
+    return OrderedDict((k, _auc_n(y_true, y_score, m)) for k, m in masks.items())
+
+
 def _mimic_vector(
     y_true: np.ndarray, y_score: np.ndarray,
     sex: np.ndarray, race: np.ndarray, age: np.ndarray,
 ) -> "OrderedDict[str, tuple[float | None, int]]":
     """MIMIC / CheXpert 子群向量：Sex/Race/Age 边缘 + Sex×Race×Age 三阶交叉（共 14 项）。"""
-    y_true, y_score = _as_arrays(y_true, y_score)
-    sex = np.asarray(sex).astype(int)
-    race = np.asarray(race).astype(int)
-    age = np.asarray(age).astype(int)
-
-    vec: "OrderedDict[str, tuple[float | None, int]]" = OrderedDict()
-    # 边缘轴（固定枚举 name 字典的键，不依赖数据取值）
-    for s, sname in MIMIC_SEX_NAMES.items():
-        vec[f"sex:{sname}"] = _auc_n(y_true, y_score, sex == s)
-    for r, rname in MIMIC_RACE_NAMES.items():
-        vec[f"race:{rname}"] = _auc_n(y_true, y_score, race == r)
-    for a, aname in MIMIC_AGE_NAMES.items():
-        vec[f"age:{aname}"] = _auc_n(y_true, y_score, age == a)
-    # Sex×Race×Age 三阶交叉（8 项，与 worst_case_auc 的交叉口径一致）
-    for s, sname in MIMIC_SEX_NAMES.items():
-        for r, rname in MIMIC_RACE_NAMES.items():
-            for a, aname in MIMIC_AGE_NAMES.items():
-                key = f"sex:{sname}|race:{rname}|age:{aname}"
-                vec[key] = _auc_n(y_true, y_score, (sex == s) & (race == r) & (age == a))
-    return vec
+    return _vector_from_masks(y_true, y_score, _mimic_masks(sex, race, age))
 
 
 def _ham_vector(
@@ -111,37 +229,14 @@ def _ham_vector(
     sex: np.ndarray, age_group: np.ndarray,
 ) -> "OrderedDict[str, tuple[float | None, int]]":
     """HAM10000 子群向量：Sex 边缘(含 age=-1) + Age 边缘(排 -1) + Sex×Age(排 -1)，共 14 项。"""
-    y_true, y_score = _as_arrays(y_true, y_score)
-    sex = np.asarray(sex).astype(int)
-    age_group = np.asarray(age_group).astype(int)
-
-    vec: "OrderedDict[str, tuple[float | None, int]]" = OrderedDict()
-    # Sex 边缘：与 worst_case_auc 一致，使用全部样本（含 age_group==-1）
-    for s, sname in HAM_SEX_NAMES.items():
-        vec[f"sex:{sname}"] = _auc_n(y_true, y_score, sex == s)
-    # Age 边缘：仅 age_group∈{0..3}（HAM_AGE_NAMES 不含 -1，排除组）
-    for a, aname in HAM_AGE_NAMES.items():
-        vec[f"age:{aname}"] = _auc_n(y_true, y_score, age_group == a)
-    # Sex×Age 交叉（8 项，age 取 0..3，隐式排除 -1）
-    for s, sname in HAM_SEX_NAMES.items():
-        for a, aname in HAM_AGE_NAMES.items():
-            vec[f"sex:{sname}|age:{aname}"] = _auc_n(
-                y_true, y_score, (sex == s) & (age_group == a)
-            )
-    return vec
+    return _vector_from_masks(y_true, y_score, _ham_masks(sex, age_group))
 
 
 def _fitzpatrick_vector(
     y_true: np.ndarray, y_score: np.ndarray, skin: np.ndarray,
 ) -> "OrderedDict[str, tuple[float | None, int]]":
     """Fitzpatrick17k 子群向量：6 个肤色子群（型 I–VI）。"""
-    y_true, y_score = _as_arrays(y_true, y_score)
-    skin = np.asarray(skin).astype(int)
-
-    vec: "OrderedDict[str, tuple[float | None, int]]" = OrderedDict()
-    for k, kname in FITZ_SKIN_NAMES.items():
-        vec[f"skin:{kname}"] = _auc_n(y_true, y_score, skin == k)
-    return vec
+    return _vector_from_masks(y_true, y_score, _fitzpatrick_masks(skin))
 
 
 def _papila_vector(
@@ -149,21 +244,14 @@ def _papila_vector(
     sex: np.ndarray, age_group: np.ndarray,
 ) -> "OrderedDict[str, tuple[float | None, int]]":
     """PAPILA 子群向量：Sex(2)+Age(2) 边缘 + Sex×Age(4) 交叉，共 8 项。"""
-    y_true, y_score = _as_arrays(y_true, y_score)
-    sex = np.asarray(sex).astype(int)
-    age_group = np.asarray(age_group).astype(int)
+    return _vector_from_masks(y_true, y_score, _papila_masks(sex, age_group))
 
-    vec: "OrderedDict[str, tuple[float | None, int]]" = OrderedDict()
-    for s, sname in PAPILA_SEX_NAMES.items():
-        vec[f"sex:{sname}"] = _auc_n(y_true, y_score, sex == s)
-    for a, aname in PAPILA_AGE_NAMES.items():
-        vec[f"age:{aname}"] = _auc_n(y_true, y_score, age_group == a)
-    for s, sname in PAPILA_SEX_NAMES.items():
-        for a, aname in PAPILA_AGE_NAMES.items():
-            vec[f"sex:{sname}|age:{aname}"] = _auc_n(
-                y_true, y_score, (sex == s) & (age_group == a)
-            )
-    return vec
+
+def _synth_vector(
+    y_true: np.ndarray, y_score: np.ndarray, a_syn: np.ndarray,
+) -> "OrderedDict[str, tuple[float | None, int]]":
+    """mimic_synth（R1 合成信号）子群向量：A_syn 两组（Asyn=0 / Asyn=1）。"""
+    return _vector_from_masks(y_true, y_score, _synth_masks(a_syn))
 
 
 def subgroup_auc_vector(
@@ -175,6 +263,7 @@ def subgroup_auc_vector(
     race: np.ndarray | None = None,
     age: np.ndarray | None = None,
     skin: np.ndarray | None = None,
+    a_syn: np.ndarray | None = None,
 ) -> "OrderedDict[str, tuple[float | None, int]]":
     """
     计算给定数据集的完整子群 AUC 向量（固定 schema、等长、可跨候选对齐）。
@@ -212,6 +301,8 @@ def subgroup_auc_vector(
         return _fitzpatrick_vector(y_true, y_score, _require("skin", skin))
     if dataset == "papila":
         return _papila_vector(y_true, y_score, _require("sex", sex), _require("age", age))
+    if dataset == "mimic_synth":
+        return _synth_vector(y_true, y_score, _require("a_syn", a_syn))
     raise ValueError(f"未知数据集 {dataset!r}，合法取值：{DATASETS}")
 
 
@@ -279,6 +370,16 @@ def _selftest() -> None:
     assert len(vec) == SUBGROUP_VECTOR_DIM["papila"], len(vec)
     assert close(vector_worst_case(vec), papila_worst_case_auc(y, s, sex, age_group))
     print(f"  papila        : dim={len(vec)}  min(vec)==worst_case ✓")
+
+    # --- mimic_synth（R1 合成信号，单一 A_syn 二值轴）---
+    n = 4000
+    y = rng.integers(0, 2, n)
+    s = 0.6 * y + rng.standard_normal(n)
+    a_syn = rng.integers(0, 2, n)
+    vec = subgroup_auc_vector("mimic_synth", y, s, a_syn=a_syn)
+    assert len(vec) == SUBGROUP_VECTOR_DIM["mimic_synth"], len(vec)
+    assert close(vector_worst_case(vec), synth_worst_case_auc(y, s, a_syn))
+    print(f"  mimic_synth   : dim={len(vec)}  min(vec)==worst_case ✓")
 
     print("subgroup_auc self-test 全部通过 ✓")
 

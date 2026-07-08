@@ -62,6 +62,9 @@ def parse_args() -> argparse.Namespace:
                         help="sex×age×label 平衡重采样强度 ∈[0,1]（0=自然分布，1=完全平衡）。"
                              "缺省不重采样。⚠️ age_group==-1（0-20）会破坏混合进制 cell 编码，"
                              "如按 age 维重采样须先在数据侧过滤 age_group>=0（见仓库 CLAUDE.md）。")
+    parser.add_argument("--swad", action="store_true",
+                        help="开启 SWAD 权重平均派生（协议 C1.7）：逐 epoch 缓存 CPU 权重，训练末在 loss "
+                             "谷区间平均，额外产出 method=swad 的 checkpoint / val 日志，与 ERM 同 config/seed。")
     return parser.parse_args()
 
 
@@ -163,6 +166,7 @@ def main() -> None:
         build_model=lambda: ResNet18Pretrained(num_classes=1),
         unpack_fn=unpack_sex_age, forward_fn=forward_image_only,
         fairness_report_fn=_fairness_report,
+        swad=args.swad,
     )
 
 

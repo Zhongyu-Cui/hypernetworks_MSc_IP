@@ -52,6 +52,9 @@ def parse_args() -> argparse.Namespace:
                         help="随机种子；缺省取 chexpert_baseline.yaml 的 training.seeds[0]")
     parser.add_argument("--resample_alpha", type=float, default=None,
                         help="敏感组×标签平衡重采样强度 ∈[0,1]（0=自然分布，1=完全平衡）；缺省不重采样。")
+    parser.add_argument("--swad", action="store_true",
+                        help="开启 SWAD 权重平均派生（协议 C*.7）：逐 epoch 缓存 CPU 权重，训练末在 loss "
+                             "谷区间平均，额外产出 method=swad 的 checkpoint / val 日志，与 ERM 同 config/seed。")
     return parser.parse_args()
 
 
@@ -147,6 +150,7 @@ def main() -> None:
         build_model=lambda: ResNet18Pretrained(num_classes=1),
         unpack_fn=unpack_sex_race_age, forward_fn=forward_image_only,
         fairness_report_fn=_fairness_report,
+        swad=args.swad,
     )
 
 

@@ -126,6 +126,41 @@ class AgeEmbedding(nn.Module):
         return self.fuse(self.age_embed(age_group))         # [B, out_dim]
 
 
+class SkinEmbedding(nn.Module):
+    """
+    Fitzpatrick17k 的单属性条件通路: 只用肤色 skin (Fitzpatrick I–VI → 0–5) 一个敏感属性。
+    结构与本模块 PatientEmbedding / AgeEmbedding 对齐 (单 embedding → 两层 fuse MLP), 仅输入由
+    「sex+race+age 三 embedding 拼接」缩为「单一 skin embedding」; 输出维度 out_dim 与
+    PatientEmbedding 一致, 可直接替换 ResNet18HyperFusion 的 self.patient_embed。
+
+    注: Fitzpatrick 条件互信息 I(Y;skin|X)≈0 (作业 67913), 据核心论点 HN 在此注定无收益,
+    本变体产出「信号缺失处的 null result」对照。
+
+    Args:
+        num_skin     : 肤色类别数 (Fitzpatrick I–VI = 6)。
+        cat_embed_dim: skin embedding 维度。
+        out_dim      : patient profile 维度 (须与模型 patient_embed_dim 一致)。
+    """
+
+    def __init__(
+        self,
+        num_skin: int = 6,
+        cat_embed_dim: int = 16,
+        out_dim: int = 128,
+    ) -> None:
+        super().__init__()
+        self.skin_embed = nn.Embedding(num_skin, cat_embed_dim)
+        self.fuse = nn.Sequential(
+            nn.Linear(cat_embed_dim, out_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(out_dim, out_dim),
+        )
+
+    def forward(self, skin: torch.Tensor) -> torch.Tensor:
+        """skin: [B] (long, 0–5) -> patient profile [B, out_dim]。"""
+        return self.fuse(self.skin_embed(skin))             # [B, out_dim]
+
+
 # ============================================================
 # HyperFusion 超网络: patient profile -> downsample 卷积权重的扰动 Δθ
 # ============================================================
@@ -454,6 +489,80 @@ class ResNet18HyperFusionAge(ResNet18HyperFusion):
         """
         bb = self.backbone
         embedding = self.patient_embed(age_group)              # [B, embed_dim]
+
+        x = bb.conv1(image)
+        x = bb.bn1(x)
+        x = bb.relu(x)
+        x = bb.maxpool(x)
+
+        x = bb.layer1(x)
+        x = bb.layer2(x)
+        x = bb.layer3(x)
+
+        x = self._hyper_layer4_block0(x, embedding)            # 唯一注入点
+        x = bb.layer4[1](x)
+
+        x = bb.avgpool(x)
+        x = torch.flatten(x, 1)
+        logits = bb.fc(x)
+        return logits
+
+
+class ResNet18HyperFusionSkin(ResNet18HyperFusion):
+    """
+    Fitzpatrick17k 版 HyperFusion: 复用 ResNet18HyperFusion 的全部机制 (仅 layer4[0].downsample
+    1x1 conv 由超网络 MIP additive 逐样本生成 θ_ds=θ_0+Δθ、E_L2 投影、grouped conv、其余层
+    与 baseline 共享), 仅把三属性 PatientEmbedding 替换为单一 skin 的 SkinEmbedding, 并把
+    forward 签名改为 (image, skin)。与 ResNet18HyperFusionAge 同构，仅条件属性由 age 换成 skin。
+
+    Args:
+        num_classes      : 分类头输出维度 (malignant 二分类 → 1)。
+        num_skin         : skin 有效类别数 (Fitzpatrick I–VI = 6)。
+        patient_embed_dim: patient profile 维度 (须与 SkinEmbedding.out_dim 一致)。
+        hyper_hidden     : 超网络 MLP 隐藏层维度。
+        mip_scale        : MIP 输出层小尺度因子 (越小初始越接近纯 baseline)。
+        use_l2_norm      : 是否对 patient profile 做 E_L2 投影。
+        pretrained       : 是否载入 ImageNet 预训练 backbone (与 baseline 一致, 默认 True)。
+    """
+
+    def __init__(
+        self,
+        num_classes: int = 1,
+        num_skin: int = 6,
+        patient_embed_dim: int = 128,
+        hyper_hidden: int = 64,
+        mip_scale: float = 0.01,
+        use_l2_norm: bool = True,
+        pretrained: bool = True,
+    ) -> None:
+        # 先按父类构建完整 HyperFusion (含预训练载入 / MIP 初始化)，patient_embed 暂为
+        # 默认三属性 PatientEmbedding；随后整体替换为单属性 SkinEmbedding。
+        super().__init__(
+            num_classes=num_classes,
+            patient_embed_dim=patient_embed_dim,
+            hyper_hidden=hyper_hidden,
+            mip_scale=mip_scale,
+            use_l2_norm=use_l2_norm,
+            pretrained=pretrained,
+        )
+        # 替换条件通路: 三属性 → 单一 6 类肤色 (输出维度不变, 不影响 hyper_net / 注入点)
+        self.patient_embed = SkinEmbedding(
+            num_skin=num_skin, cat_embed_dim=16, out_dim=patient_embed_dim,
+        )
+
+    def forward(self, image: torch.Tensor, skin: torch.Tensor) -> torch.Tensor:
+        """
+        与父类 forward 同构，仅条件向量由单一 skin 生成 (父类 forward 签名是三属性，此处覆盖)。
+
+        Args:
+            image: [B, 3, 224, 224] 皮肤镜 RGB 图像。
+            skin : [B] long，0–5 (6 肤色型)。
+
+        Returns:
+            logits: [B, num_classes]。
+        """
+        bb = self.backbone
+        embedding = self.patient_embed(skin)                   # [B, embed_dim]
 
         x = bb.conv1(image)
         x = bb.bn1(x)
