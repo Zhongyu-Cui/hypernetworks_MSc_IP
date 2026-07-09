@@ -21,11 +21,14 @@
 # 数据集/方法差异由 sbatch 命令行 + --export 注入（同 c_search_papila_cv.sh 约定）：
 #   --partition=<gpus24|gpus48>   HyperAdapt bs128 用 gpus48 等-batch，余 gpus24
 #   --job-name / --output         作业名 / 日志路径
-#   --export=ALL,PY_SCRIPT=<abs.py>,CONFIG_INDEX=<0-5>[,BATCH=<n>][,SWAD=1]
+#   --export=ALL,PY_SCRIPT=<abs.py>,CONFIG_INDEX=<0-5>[,BATCH=<n>][,SWAD=1][,FREEZE=1]
 #     PY_SCRIPT    : HAM 训练脚本绝对路径（train_ham10000_*.py，均支持 --cv/--fold）
 #     CONFIG_INDEX : C1.5 Pareto 选定配置序号（必填）
 #     BATCH        : 可选，覆盖 config 的 batch_size（HyperAdapt 等-batch 传 128）
 #     SWAD         : 可选，=1 时加 --swad（仅 ERM 用，逐折派生 SWAD 基线）
+#     FREEZE       : 可选，=1 时加 --freeze_backbone（冻结 regime 实验 F：冻结 ImageNet 预训练
+#                    backbone、只训 adapter+fc，对齐 HyperAdapt 论文；method 记为 *_frozen，与
+#                    全微调结果分开存放。复用同一 Pareto config 保证仅「freeze」单变量差异）
 #
 # 示例（ERM 全-CV + 逐折 SWAD 派生）：
 #   sbatch --partition=gpus24 --job-name=a_ham_erm_cv \
@@ -55,7 +58,7 @@ CV=5                                  # 5 折 lesion 级 GroupKFold（cv5/fold{0
 FOLD=$SLURM_ARRAY_TASK_ID             # 0–4：折号
 SEED=$((42 + FOLD))                   # fold↔seed 一一映射，避免 run_id 覆盖
 
-echo "A_HAM_CV_OOF  PY_SCRIPT=$PY_SCRIPT  config_index=$CONFIG_INDEX  fold=$FOLD  seed=$SEED  cv=$CV  BATCH=${BATCH:-config}  SWAD=${SWAD:-0}"
+echo "A_HAM_CV_OOF  PY_SCRIPT=$PY_SCRIPT  config_index=$CONFIG_INDEX  fold=$FOLD  seed=$SEED  cv=$CV  BATCH=${BATCH:-config}  SWAD=${SWAD:-0}  FREEZE=${FREEZE:-0}"
 
 python "$PY_SCRIPT" \
     --config_index "$CONFIG_INDEX" \
@@ -63,4 +66,5 @@ python "$PY_SCRIPT" \
     --cv "$CV" \
     --fold "$FOLD" \
     ${BATCH:+--batch_size "$BATCH"} \
-    ${SWAD:+--swad}
+    ${SWAD:+--swad} \
+    ${FREEZE:+--freeze_backbone}

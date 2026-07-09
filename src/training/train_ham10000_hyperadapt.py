@@ -58,6 +58,10 @@ def parse_args() -> argparse.Namespace:
                         help="K 折 lesion 级 GroupKFold（路线 A 用 5）；0=用单次 80/10/10 划分（默认）。")
     parser.add_argument("--fold", type=int, default=None,
                         help="--cv>0 时指定折号 k ∈ [0,K)。")
+    parser.add_argument("--freeze_backbone", action="store_true",
+                        help="冻结 regime（对齐 HyperAdapt 论文「冻结 backbone、只训 adapter」）：冻结 "
+                             "backbone 卷积/BN 仿射参数，梯度只流入超网络生成器 + fc。method 记为 "
+                             "hyperadapt_frozen，与全微调结果分开存放，互不覆盖。")
     return parser.parse_args()
 
 
@@ -156,11 +160,15 @@ def main() -> None:
     train_transform, eval_transform = build_transforms(cfg)
     train_loader, val_loader, test_loader = get_dataloaders(cfg, split_dir, train_transform, eval_transform)
 
+    # 冻结 regime：method 记为 hyperadapt_frozen，与全微调结果分开命名，互不覆盖
+    method = "hyperadapt_frozen" if args.freeze_backbone else METHOD
+
     run_training(
-        dataset=DATASET, method=METHOD, output_dir=output_dir, cfg=cfg, hparam=hparam, seed=seed,
+        dataset=DATASET, method=method, output_dir=output_dir, cfg=cfg, hparam=hparam, seed=seed,
         train_loader=train_loader, val_loader=val_loader, test_loader=test_loader,
         build_model=lambda: ResNet18HyperAdaptAge(
-            num_classes=1, num_age=NUM_AGE, pretrained=cfg["model"]["pretrained"]),
+            num_classes=1, num_age=NUM_AGE, pretrained=cfg["model"]["pretrained"],
+            freeze_backbone=args.freeze_backbone),
         unpack_fn=unpack_sex_age, forward_fn=forward_age,
         fairness_report_fn=_fairness_report,
     )

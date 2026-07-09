@@ -421,6 +421,14 @@ def run_training(
     if hasattr(model, "param_breakdown"):
         n_total, n_hyper, n_backbone = model.param_breakdown()
         print(f"        (backbone {n_backbone:,} + hyper {n_hyper:,})")
+    # 冻结 regime：build_model 可返回带 requires_grad=False 的 backbone（如 freeze_backbone=True）。
+    # 仅把可训练参数交给优化器——冻结参数本就 grad=None 不更新，这里显式过滤以免 AdamW 解耦
+    # weight decay 误伤，并让日志中的可训练参数量清晰（若无冻结则与 model.parameters() 等价）。
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
+    n_trainable = sum(p.numel() for p in trainable_params)
+    if n_trainable != n_params:
+        print(f"        FROZEN regime: trainable {n_trainable:,} / frozen {n_params - n_trainable:,} "
+              f"(仅可训练参数进优化器)")
     print(f"Optim : AdamW(lr={hparam.lr:.0e}, weight_decay={hparam.wd:.0e})  "
           f"[来自超参网格 config={hparam.tag}]")
     print(f"Misc  : grad_clip_norm={train_cfg['grad_clip_norm']}, batch_size={train_cfg['batch_size']}")
@@ -429,7 +437,7 @@ def run_training(
     print(f"Val log: {log_path}")
 
     criterion = nn.BCEWithLogitsLoss()
-    optimizer = optim.AdamW(model.parameters(), lr=hparam.lr, weight_decay=hparam.wd)
+    optimizer = optim.AdamW(trainable_params, lr=hparam.lr, weight_decay=hparam.wd)
 
     best_val_auc = -np.inf
     best_val_wc_auc = -np.inf

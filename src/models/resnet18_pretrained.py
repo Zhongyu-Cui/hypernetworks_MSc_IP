@@ -25,10 +25,31 @@ class ResNet18Pretrained(nn.Module):
             - 2 -> 配合 nn.CrossEntropyLoss
     """
 
-    def __init__(self, num_classes: int = 1) -> None:
+    def __init__(
+        self,
+        num_classes: int = 1,
+        pretrained: bool = True,
+        freeze_backbone: bool = False,
+    ) -> None:
         super().__init__()
-        self.backbone = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
+        weights = ResNet18_Weights.IMAGENET1K_V1 if pretrained else None
+        self.backbone = resnet18(weights=weights)
         self.backbone.fc = nn.Linear(self.backbone.fc.in_features, num_classes)
+        if freeze_backbone:
+            self._freeze_backbone()
+
+    def _freeze_backbone(self) -> None:
+        """
+        冻结特征提取 backbone 的可学习参数 (requires_grad=False)，只保留任务头 fc 可训练——
+        即「linear probe on frozen ImageNet features」，作为冻结 regime 下 HN 的 ERM 对照。
+
+        与 HN 变体的 _freeze_backbone 语义严格一致：只冻结卷积/BN 仿射参数 (θ)；BN 的
+        running_mean/var 是 buffer (非梯度更新)，仍随训练分布自适应——把实验变量干净隔离
+        为「backbone 卷积/线性权重能否被梯度更新」，避免 ImageNet BN 统计硬套拖垮整体 AUC。
+        """
+        for name, param in self.backbone.named_parameters():
+            if not name.startswith("fc."):
+                param.requires_grad = False
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.backbone(x)

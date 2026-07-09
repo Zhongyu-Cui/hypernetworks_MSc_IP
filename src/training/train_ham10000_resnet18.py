@@ -69,6 +69,10 @@ def parse_args() -> argparse.Namespace:
                         help="K 折 lesion 级 GroupKFold（路线 A 用 5）；0=用单次 80/10/10 划分（默认）。")
     parser.add_argument("--fold", type=int, default=None,
                         help="--cv>0 时指定折号 k ∈ [0,K)。")
+    parser.add_argument("--freeze_backbone", action="store_true",
+                        help="冻结 regime：冻结 ImageNet 预训练 backbone 卷积/BN 仿射参数，只训任务头 fc "
+                             "(linear probe)，作为冻结 HN 的 ERM 对照。method 记为 erm_frozen，与全微调 "
+                             "ERM 结果分开存放，互不覆盖。")
     return parser.parse_args()
 
 
@@ -178,10 +182,13 @@ def main() -> None:
     print(f"  Train: {len(train_loader.dataset):,} | Val: {len(val_loader.dataset):,} | "
           f"Test: {len(test_loader.dataset):,}")
 
+    # 冻结 regime：method 记为 erm_frozen，checkpoint/日志与全微调 ERM 分开命名，互不覆盖
+    method = "erm_frozen" if args.freeze_backbone else METHOD
+
     run_training(
-        dataset=DATASET, method=METHOD, output_dir=output_dir, cfg=cfg, hparam=hparam, seed=seed,
+        dataset=DATASET, method=method, output_dir=output_dir, cfg=cfg, hparam=hparam, seed=seed,
         train_loader=train_loader, val_loader=val_loader, test_loader=test_loader,
-        build_model=lambda: ResNet18Pretrained(num_classes=1),
+        build_model=lambda: ResNet18Pretrained(num_classes=1, freeze_backbone=args.freeze_backbone),
         unpack_fn=unpack_sex_age, forward_fn=forward_image_only,
         fairness_report_fn=_fairness_report,
         swad=args.swad,
