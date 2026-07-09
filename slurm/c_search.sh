@@ -10,10 +10,12 @@
 #   --partition=<gpus24|gpus48>      分区（HyperAdapt bs128 用 gpus48，余 gpus24）
 #   --job-name=<name>                作业名
 #   --output=<logpath>               日志路径
-#   --export=ALL,PY_SCRIPT=<abs.py>[,BATCH=<n>][,SWAD=1]
+#   --export=ALL,PY_SCRIPT=<abs.py>[,BATCH=<n>][,SWAD=1][,FREEZE=1]
 #     PY_SCRIPT : 训练脚本绝对路径（如 .../train_ham10000_resnet18.py）
 #     BATCH     : 可选，覆盖 config 的 batch_size（等 batch 对照时留空=用 config）
 #     SWAD      : 可选，=1 时加 --swad（一般搜索阶段不用，确认阶段派生 SWAD 才用）
+#     FREEZE    : 可选，=1 时加 --freeze_backbone（冻结 regime 实验 F 的独立超参搜索；
+#                 method 记为 *_frozen，val 日志与全微调分开，供 A1 对 frozen 单独选 Pareto）
 #
 # 示例（HAM ERM 搜索）：
 #   sbatch --partition=gpus24 --job-name=c1_erm_search \
@@ -38,10 +40,11 @@ fi
 CONFIG_INDEX=$SLURM_ARRAY_TASK_ID   # array 0–5 直接映射到 config_index 0–5
 SEARCH_SEED=42                       # SEEDS_SEARCH：搜索阶段每配置 1 seed
 
-echo "C_SEARCH  PY_SCRIPT=$PY_SCRIPT  config_index=$CONFIG_INDEX  seed=$SEARCH_SEED  BATCH=${BATCH:-config}  SWAD=${SWAD:-0}"
+echo "C_SEARCH  PY_SCRIPT=$PY_SCRIPT  config_index=$CONFIG_INDEX  seed=$SEARCH_SEED  BATCH=${BATCH:-config}  SWAD=${SWAD:-0}  FREEZE=${FREEZE:-0}"
 
 python "$PY_SCRIPT" \
     --config_index "$CONFIG_INDEX" \
     --seed "$SEARCH_SEED" \
     ${BATCH:+--batch_size "$BATCH"} \
-    ${SWAD:+--swad}
+    ${SWAD:+--swad} \
+    ${FREEZE:+--freeze_backbone}

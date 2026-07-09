@@ -10,11 +10,12 @@
 #   --partition=<gpus24|gpus48>      分区
 #   --job-name=<name>                作业名
 #   --output=<logpath>               日志路径
-#   --export=ALL,PY_SCRIPT=<abs.py>,CONFIG_INDEX=<0..5>[,BATCH=<n>][,SWAD=1]
+#   --export=ALL,PY_SCRIPT=<abs.py>,CONFIG_INDEX=<0..5>[,BATCH=<n>][,SWAD=1][,FREEZE=1]
 #     PY_SCRIPT    : 训练脚本绝对路径
-#     CONFIG_INDEX : Pareto 选定的超参配置序号（必填）
+#     CONFIG_INDEX : Pareto 选定的超参配置序号（必填；frozen 用 A1 对 *_frozen 单独选出的值）
 #     BATCH        : 可选，覆盖 config 的 batch_size
 #     SWAD         : 可选，=1 时加 --swad（仅 ERM 确认用，派生 SWAD 基线）
+#     FREEZE       : 可选，=1 时加 --freeze_backbone（冻结 regime 实验 F 的 5-seed 确认）
 #
 # 示例（HAM ERM 确认 + SWAD 派生，假设 Pareto 选定 config_index=3）：
 #   sbatch --partition=gpus24 --job-name=c1_erm_confirm \
@@ -39,10 +40,11 @@ fi
 SEEDS=(42 43 44 45 46)               # SEEDS_CONFIRM：确认阶段 5 seed
 SEED=${SEEDS[$SLURM_ARRAY_TASK_ID]}
 
-echo "C_CONFIRM  PY_SCRIPT=$PY_SCRIPT  config_index=$CONFIG_INDEX  seed=$SEED  BATCH=${BATCH:-config}  SWAD=${SWAD:-0}"
+echo "C_CONFIRM  PY_SCRIPT=$PY_SCRIPT  config_index=$CONFIG_INDEX  seed=$SEED  BATCH=${BATCH:-config}  SWAD=${SWAD:-0}  FREEZE=${FREEZE:-0}"
 
 python "$PY_SCRIPT" \
     --config_index "$CONFIG_INDEX" \
     --seed "$SEED" \
     ${BATCH:+--batch_size "$BATCH"} \
-    ${SWAD:+--swad}
+    ${SWAD:+--swad} \
+    ${FREEZE:+--freeze_backbone}
