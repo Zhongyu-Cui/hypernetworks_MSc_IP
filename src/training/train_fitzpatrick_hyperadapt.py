@@ -51,7 +51,26 @@ def parse_args() -> argparse.Namespace:
                         help="随机种子；缺省取 fitzpatrick_baseline.yaml 的 training.seeds[0]")
     parser.add_argument("--batch_size", type=int, default=None,
                         help="覆盖 config 的 batch_size；HyperAdapt 逐样本卷积核显存大，协议要求等 batch 对照。")
+    parser.add_argument("--cv", type=int, default=0,
+                        help="K 折 StratifiedKFold（实验 F CV-OOF 用 5）；0=用单次 80/10/10 划分（默认）。")
+    parser.add_argument("--fold", type=int, default=None,
+                        help="--cv>0 时指定折号 k ∈ [0,K)。")
+    parser.add_argument("--freeze_backbone", action="store_true",
+                        help="冻结 regime（对齐 HyperAdapt 论文「冻结 backbone、只训 adapter」）：冻结 backbone "
+                             "卷积/BN 仿射参数，梯度只流入超网络生成器 + fc。method 记为 hyperadapt_frozen，"
+                             "与全微调分开存放。")
     return parser.parse_args()
+
+
+def resolve_paths(cfg: dict, cv: int, fold: int | None) -> tuple[Path, Path]:
+    """按 --cv/--fold 解析 (split_dir, output_dir)；CV 时重定向到 cv{K}/fold{k} 与 OUTPUT_DIR/cv{K}，
+    与单-split 结果隔离，绝不覆盖。"""
+    base = REPO_ROOT / cfg["data"]["split_dir"]
+    if cv and cv >= 2:
+        if fold is None or not (0 <= fold < cv):
+            raise ValueError(f"--cv={cv} 需配合合法 --fold ∈ [0,{cv})")
+        return base / f"cv{cv}" / f"fold{fold}", OUTPUT_DIR / f"cv{cv}"
+    return base, OUTPUT_DIR
 
 
 def build_transforms(cfg: dict) -> tuple[transforms.Compose, transforms.Compose]:
@@ -74,10 +93,9 @@ def build_transforms(cfg: dict) -> tuple[transforms.Compose, transforms.Compose]
 
 
 def get_dataloaders(
-    cfg: dict, train_transform: transforms.Compose, eval_transform: transforms.Compose,
+    cfg: dict, split_dir: Path, train_transform: transforms.Compose, eval_transform: transforms.Compose,
 ) -> tuple[DataLoader, DataLoader, DataLoader]:
     """构建 train / val / test DataLoader（split 已图像级划分；val/test 保持真实分布，HN 不重采样）。"""
-    split_dir = REPO_ROOT / cfg["data"]["split_dir"]
     batch_size = cfg["training"]["batch_size"]
     num_workers = cfg["dataloader"]["num_workers"]
     pin_memory = cfg["dataloader"]["pin_memory"]
@@ -110,16 +128,21 @@ def main() -> None:
     seed = args.seed if args.seed is not None else cfg["training"]["seeds"][0]
     hparam = get_hparam_config(args.config_index)
 
+    split_dir, output_dir = resolve_paths(cfg, args.cv, args.fold)
+    method = "hyperadapt_frozen" if args.freeze_backbone else METHOD
+
     seed_everything(seed)
-    print("Loading Fitzpatrick17k (malignant, skin-conditioned HyperAdapt)...")
+    print(f"Loading Fitzpatrick17k (malignant, skin-conditioned HyperAdapt)  "
+          f"split_dir={split_dir.name}  output_dir={output_dir.name}...")
     train_transform, eval_transform = build_transforms(cfg)
-    train_loader, val_loader, test_loader = get_dataloaders(cfg, train_transform, eval_transform)
+    train_loader, val_loader, test_loader = get_dataloaders(cfg, split_dir, train_transform, eval_transform)
 
     run_training(
-        dataset=DATASET, method=METHOD, output_dir=OUTPUT_DIR, cfg=cfg, hparam=hparam, seed=seed,
+        dataset=DATASET, method=method, output_dir=output_dir, cfg=cfg, hparam=hparam, seed=seed,
         train_loader=train_loader, val_loader=val_loader, test_loader=test_loader,
         build_model=lambda: ResNet18HyperAdaptSkin(
-            num_classes=1, num_skin=NUM_SKIN, pretrained=cfg["model"]["pretrained"]),
+            num_classes=1, num_skin=NUM_SKIN, pretrained=cfg["model"]["pretrained"],
+            freeze_backbone=args.freeze_backbone),
         unpack_fn=unpack_skin, forward_fn=forward_skin,
         fairness_report_fn=_fairness_report,
     )
