@@ -156,6 +156,154 @@ def equalized_odds_gap(
     return tpr_gap, fpr_gap, eo_gap
 
 
+# ============================================================
+# 逐子群混淆矩阵四联指标：sensitivity / specificity / PPV / NPV
+# （评审补强扩展；在已落盘预测上零重训重算，供子群分类度量表 + 排名消费）
+# ============================================================
+# 四指标 → (SubgroupClfMetrics 属性名, 用于纳入门限的计数属性名)。
+#   sensitivity=TPR=TP/(TP+FN)，需 ≥min_class_n 个**正样本**；
+#   specificity=TNR=TN/(TN+FP)=1-FPR，需 ≥min_class_n 个**负样本**；
+#   PPV=precision=TP/(TP+FP)，需 ≥min_class_n 个**预测为正**；
+#   NPV=TN/(TN+FN)，需 ≥min_class_n 个**预测为负**。
+# 门限计数保证 gap/worst 不被 n 极小子群的 0/1 退化率污染（与 equalized_odds_gap 同思路）。
+CLF_METRIC_COUNT: "OrderedDict[str, str]" = OrderedDict([
+    ("sensitivity", "n_pos"),
+    ("specificity", "n_neg"),
+    ("ppv", "n_pred_pos"),
+    ("npv", "n_pred_neg"),
+])
+
+
+@dataclass(frozen=True)
+class SubgroupClfMetrics:
+    """单子群在某阈值下的混淆矩阵四联指标；任一指标缺对应样本时为 None。"""
+
+    sensitivity: float | None  # TPR = TP/(TP+FN)
+    specificity: float | None  # TNR = TN/(TN+FP)
+    ppv: float | None          # TP/(TP+FP)
+    npv: float | None          # TN/(TN+FN)
+    n: int
+    n_pos: int
+    n_neg: int
+    n_pred_pos: int
+    n_pred_neg: int
+
+
+def _clf_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> SubgroupClfMetrics:
+    """
+    从组内 (真值, 阈值判定后预测) 算 sensitivity/specificity/PPV/NPV 及各计数。
+
+    Args:
+        y_true: [n] 0/1 真实标签（组内）。
+        y_pred: [n] 0/1 预测（组内，已按阈值判定）。
+
+    Returns:
+        SubgroupClfMetrics；分母为 0 的指标置 None（如无正样本 → sensitivity None）。
+    """
+    y_true = np.asarray(y_true).astype(int)
+    y_pred = np.asarray(y_pred).astype(int)
+    tp = int(((y_true == 1) & (y_pred == 1)).sum())
+    fn = int(((y_true == 1) & (y_pred == 0)).sum())
+    tn = int(((y_true == 0) & (y_pred == 0)).sum())
+    fp = int(((y_true == 0) & (y_pred == 1)).sum())
+    n_pos, n_neg = tp + fn, tn + fp
+    n_pred_pos, n_pred_neg = tp + fp, tn + fn
+    return SubgroupClfMetrics(
+        sensitivity=(tp / n_pos) if n_pos > 0 else None,
+        specificity=(tn / n_neg) if n_neg > 0 else None,
+        ppv=(tp / n_pred_pos) if n_pred_pos > 0 else None,
+        npv=(tn / n_pred_neg) if n_pred_neg > 0 else None,
+        n=int(len(y_true)), n_pos=n_pos, n_neg=n_neg,
+        n_pred_pos=n_pred_pos, n_pred_neg=n_pred_neg,
+    )
+
+
+def subgroup_classification_metrics(
+    dataset: str,
+    y_true: np.ndarray,
+    prob: np.ndarray,
+    attrs: dict[str, np.ndarray],
+    threshold: float,
+    *,
+    marginal_only: bool = True,
+) -> "OrderedDict[str, SubgroupClfMetrics]":
+    """
+    各子群在**单一全局阈值**下的 sensitivity / specificity / PPV / NPV（子群集合来自 `subgroup_masks`）。
+
+    与 `subgroup_tpr_fpr` 同口径（同一全局阈值判定全体 → 按子群切分算率），仅指标集合不同：
+    这里给临床常用的四联（敏感度/特异度/阳性预测值/阴性预测值），后二者依赖子群患病率、
+    正是「按敏感组分别看」的意义所在。
+
+    Args:
+        dataset      : 数据集名（见 subgroup_masks）。
+        y_true       : [N] 0/1 标签。
+        prob         : [N] 概率（∈[0,1]，来自 to_prob）。
+        attrs        : 敏感属性字典（按数据集所需键，直接 splat 进 subgroup_masks）。
+        threshold    : 全局判正阈值；y_pred = (prob >= threshold)。
+        marginal_only: True 仅返回边缘子群（键不含 `|`）；False 返回全子群（含 joint 交叉）。
+
+    Returns:
+        OrderedDict[子群键 -> SubgroupClfMetrics]。
+    """
+    y_true = np.asarray(y_true).astype(int)
+    prob = np.asarray(prob, dtype=float)
+    y_pred = (prob >= threshold).astype(int)
+    masks = subgroup_masks(dataset, **{k: np.asarray(v) for k, v in attrs.items()})
+    out: "OrderedDict[str, SubgroupClfMetrics]" = OrderedDict()
+    for key, mask in masks.items():
+        if marginal_only and "|" in key:
+            continue
+        out[key] = _clf_metrics(y_true[mask], y_pred[mask])
+    return out
+
+
+def clf_metric_values(
+    rates: "OrderedDict[str, SubgroupClfMetrics]",
+    metric: str,
+    *,
+    min_class_n: int = 10,
+) -> list[float]:
+    """
+    从子群四联指标字典抽取某指标的**合格子群**取值列表（用于 worst/gap）。
+
+    合格 = 该指标非 None 且其对应分母计数 ≥ min_class_n（见 CLF_METRIC_COUNT），
+    避免 n 极小子群的退化率进入极差/最小值。
+
+    Args:
+        rates      : subgroup_classification_metrics 的输出。
+        metric     : {"sensitivity","specificity","ppv","npv"} 之一。
+        min_class_n: 纳入某子群该指标所需的对应分母最小样本数。
+
+    Returns:
+        合格子群的指标值列表（可能为空）。
+    """
+    if metric not in CLF_METRIC_COUNT:
+        raise ValueError(f"未知指标 {metric!r}，合法：{tuple(CLF_METRIC_COUNT)}")
+    cnt_attr = CLF_METRIC_COUNT[metric]
+    vals: list[float] = []
+    for r in rates.values():
+        v = getattr(r, metric)
+        if v is not None and getattr(r, cnt_attr) >= min_class_n:
+            vals.append(float(v))
+    return vals
+
+
+def worst_group_clf(
+    rates: "OrderedDict[str, SubgroupClfMetrics]", metric: str, *, min_class_n: int = 10,
+) -> float | None:
+    """给定阈值下某四联指标的**最小合格子群值**（worst-group，越大越好）；无合格子群时 None。"""
+    vals = clf_metric_values(rates, metric, min_class_n=min_class_n)
+    return min(vals) if vals else None
+
+
+def clf_gap(
+    rates: "OrderedDict[str, SubgroupClfMetrics]", metric: str, *, min_class_n: int = 10,
+) -> float | None:
+    """某四联指标的**子群间极差**（max−min，越小越公平）；合格子群 < 2 时 None。"""
+    vals = clf_metric_values(rates, metric, min_class_n=min_class_n)
+    return (max(vals) - min(vals)) if len(vals) >= 2 else None
+
+
 def worst_group_tpr(
     rates: "OrderedDict[str, SubgroupRate]",
     *,
@@ -355,12 +503,36 @@ def _selftest() -> None:
     _, ov_fpr, _, _ = _tpr_fpr(y, predf)
     assert ov_fpr <= 0.2 + 1e-9
 
+    # --- 4b) 四联指标 sensitivity/specificity/PPV/NPV 与 sklearn 交叉验证（mimic schema、原生阈值）---
+    from sklearn.metrics import precision_score
+    clf = subgroup_classification_metrics("mimic", y, to_prob(logits, False), attrs, 0.5)
+    for gkey, gmask in (("age:<60", age == 0), ("age:>=60", age == 1),
+                        ("sex:Male", sex == 0), ("race:White", race == 0)):
+        yg = y[gmask]; pg = (prob[gmask] >= 0.5).astype(int)
+        m = clf[gkey]
+        # sensitivity=recall(pos), specificity=recall(neg), PPV=precision(pos), NPV=precision(neg)
+        assert abs(m.sensitivity - recall_score(yg, pg, pos_label=1, zero_division=0)) < 1e-12
+        assert abs(m.specificity - recall_score(yg, pg, pos_label=0, zero_division=0)) < 1e-12
+        assert abs(m.ppv - precision_score(yg, pg, pos_label=1, zero_division=0)) < 1e-12
+        assert abs(m.npv - precision_score(yg, pg, pos_label=0, zero_division=0)) < 1e-12
+        # sensitivity 与 subgroup_tpr_fpr 的 TPR 应一致（同一混淆矩阵的两条实现路径）
+        assert abs(m.sensitivity - rep.native_rates[gkey].tpr) < 1e-12
+        # specificity == 1 - FPR
+        assert abs(m.specificity - (1.0 - rep.native_rates[gkey].fpr)) < 1e-12
+    # worst_group_clf / clf_gap 手工复核（sensitivity，min_class_n=10）
+    sens_vals = [v.sensitivity for v in clf.values()
+                 if v.sensitivity is not None and v.n_pos >= 10]
+    assert abs(worst_group_clf(clf, "sensitivity") - min(sens_vals)) < 1e-12
+    assert abs(clf_gap(clf, "sensitivity") - (max(sens_vals) - min(sens_vals))) < 1e-12
+
     # --- 5) 单轴数据集（fitzpatrick skin）无 joint 键，marginal_only 不删任何组 ---
     n = 3000
     y = rng.integers(0, 2, n); skin = rng.integers(0, 6, n)
     logits = 0.7 * (2 * y - 1) + rng.standard_normal(n)
     rep2 = operating_point_report("fitzpatrick", y, logits, {"skin": skin}, score_is_prob=False)
     assert len(rep2.native_rates) == 6
+    assert len(subgroup_classification_metrics("fitzpatrick", y, to_prob(logits, False),
+                                               {"skin": skin}, 0.5)) == 6
 
     # --- 6) 校验：坏 target_fpr / 无负样本 ---
     for bad in (lambda: threshold_at_overall_fpr(y, prob[:n], 0.0),

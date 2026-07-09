@@ -449,13 +449,17 @@ D6-HP 同时做 21 个假设检验（Overall AUC 9 + canonical worst 9 + 边缘 
      多重校正后仍显著跑赢 ERM/ROC**（R4.1/R4.3，全局 FDR 存活 7/9，q≤0.034）。
 
 - **⚠️ 关键限定（充分方向的边界）**：上述充分性证据**只在 Overall / 池化判别层面成立，不延伸到 worst-group
-  公平**——R1 的 worst-group(A_syn) 增益平/微负（边际先验型信号只改池化判别、不改组内最差子群排序），HAM 的
-  worst-group 改善方向一致但受**评估端小样本地板**限制未达显著（R4.2）。即：**「信号存在 ⇒ 整体判别增益」获
-  因果+观测双向证实，但「信号存在 ⇒ worst-group 公平改善」（本课题最初动机）未获证实**。
+  公平**——R1 的 worst-group(A_syn) 增益平/微负（边际先验型信号只改池化判别、不改组内最差子群排序）。HAM 的
+  worst-group 在单-split 下曾受**评估端小样本地板**限制而「未达显著」（R4.2）；**路线 A（`docs/routeA_ham_cv_oof_fairness.md`）
+  已把该地板移除**——改 5 折 lesion GroupKFold、5 折 disjoint test 池化成全 9707 OOF，少数格 n 放大 5–10×、
+  **进噪声地板的格 3/14→0/14**。地板移除后，**3 HN 的 worst-group 对 ERM 仍打平（点估计一律微负、CI 跨 0）、
+  且显著输给 attribute-blind 的 SWAD**——故先前的「未达显著（疑似评估噪声）」正式升级为**有功效的否定**。即：
+  **「信号存在 ⇒ 整体判别增益」获因果+观测双向证实，而「信号存在 ⇒ worst-group 公平改善」（本课题最初动机）
+  在 HAM 上（评估-n 地板移除后）获有功效的证伪**。
 
-**净表述**：iff 判据在**整体判别增益**层面获必要（弱-中）+ 充分（因果）双向支持；但 HN 能否把该信号转化为
-**worst-group 公平提升**——本项目的核心公平目标——**证据不足以确认**，且现有机制证据（R1/HAM）提示信号先验
-多改池化、少改组内排序。下方 D7-1~5 为分项支撑。
+**净表述**：iff 判据在**整体判别增益**层面获必要（弱-中）+ 充分（因果）双向支持；但 HN 把该信号转化为
+**worst-group 公平提升**——本项目的核心公平目标——在 HAM 上（路线 A 解除评估-n 限制后）**未实现且被有功效地证伪**
+（对 ERM 打平、显著输 SWAD），机制证据（R1/HAM）一致指向信号先验多改池化、少改组内排序。下方 D7-1~5 为分项支撑。
 
 1. **核心论点成立、但增益被小样本噪声压制**：conditional-MI 干净地区分出唯一被 CI 确认有信号的数据集
    （HAM-age，`I(Y;A|X)=+0.0138`，95%CI 下界>0）；其余数据集中 **MIMIC 落在噪声地板（真值≈0）**、
@@ -467,8 +471,7 @@ D6-HP 同时做 21 个假设检验（Overall AUC 9 + canonical worst 9 + 边缘 
    跑赢 ERM/ROC（p=0.0001~0.0051 vs ERM），HyperFusion/HyperAdapt 亦显著赢 SWAD；**且经 BH-FDR 多重比较
    校正后仍稳健**（全部 3 HN vs ERM/ROC 在全局 21-比较 FDR 下均存活，q≤0.034，R4.3）。**worst-group 仍不显著
    （CI 收窄 2× 后依旧跨 0，FDR 后 0 存活），且经诊断瓶颈在评估端子群小样本（joint~26，R4.2）而非 seed 数**。
-   即修订为："HAM 上 HN 的 **Overall 增益已（经多重性校正）证实显著**、worst-group 改善方向一致但受评估-n
-   限制未达显著"——比旧 "方向对、全未显著"更精确，且都吻合 `I(Y;age|X)>0` 的预测。
+   ⚠️ **路线 A（`docs/routeA_ham_cv_oof_fairness.md`，5 折 CV-OOF 池化 n=9707、少数格 n×5–10、进噪声地板格 3/14→0/14）已移除该评估-n 地板，worst-group 判决翻新**：地板移除后 3 HN 对 ERM 仍打平（点估计**微负**、CI 跨 0）、且**显著输给 SWAD**——上文单-split「HN 一致抬升 worst-group（HyperHead 边缘 0.812 vs ERM 0.754）」实为**噪声地板内的伪抬升**（CV-OOF 下 HyperHead 边缘 worst 0.783 反低于 ERM 0.797）。净修订：HAM 上 HN 的 **Overall 增益经多重性校正证实显著**；worst-group 公平在**评估-n 地板移除后获有功效的否定**（对 ERM 打平、显著输 SWAD）——与 R1 合成（边际先验型信号只改池化、不改组内排序）机制自洽。
 
 2. **null 数据集判决一致（3 库，PAPILA 已剔除）**：MIMIC、CheXpert、Fitzpatrick 上，HN 相对
    attribute-blind 基线 CI 全重叠，无稳健公平改善；Fitzpatrick 的 HyperFusion 甚至退化。这与
@@ -504,6 +507,5 @@ D6-HP 同时做 21 个假设检验（Overall AUC 9 + canonical worst 9 + 边缘 
 
 **一句话**：`I(Y;A|X)>0` 是 HN 相对 attribute-blind 基线取得增益的数据侧闸门；本研究**分向**给出证据——
 **充分方向**由 R1 合成剂量-反应（因果）+ HAM 自然信号（BH-FDR 后显著）**证实**，但**仅限 Overall 整体判别**；
-**必要方向**由 3 个 null 库（MIMIC 真值≈0、CheXpert/Fitzpatrick 未达 MDE）打平**弱-中支持**；而 HN 把信号
-转化为 **worst-group 公平提升**这一核心目标**尚未获证实**（R1 worst-group 平、HAM 受评估-n 限制）。
+**必要方向**由 3 个 null 库（MIMIC 真值≈0、CheXpert/Fitzpatrick 未达 MDE）打平**弱-中支持**；而 HN 把信号转化为 **worst-group 公平提升**这一核心目标：R1 合成为平/微负，**HAM 经路线 A（5 折 CV-OOF、评估-n 地板 3/14→0/14 已移除）获有功效的否定**（对 ERM 打平、显著输 attribute-blind 的 SWAD）——即**未实现且已被证伪**，非「尚未证实」。
 PAPILA 因探针不可靠列为灰区、不计入判决。

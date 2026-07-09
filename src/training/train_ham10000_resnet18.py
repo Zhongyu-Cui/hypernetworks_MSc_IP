@@ -65,7 +65,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--swad", action="store_true",
                         help="开启 SWAD 权重平均派生（协议 C1.7）：逐 epoch 缓存 CPU 权重，训练末在 loss "
                              "谷区间平均，额外产出 method=swad 的 checkpoint / val 日志，与 ERM 同 config/seed。")
+    parser.add_argument("--cv", type=int, default=0,
+                        help="K 折 lesion 级 GroupKFold（路线 A 用 5）；0=用单次 80/10/10 划分（默认）。")
+    parser.add_argument("--fold", type=int, default=None,
+                        help="--cv>0 时指定折号 k ∈ [0,K)。")
     return parser.parse_args()
+
+
+def resolve_paths(cfg: dict, cv: int, fold: int | None) -> tuple[Path, Path]:
+    """
+    按 --cv/--fold 解析 (split_dir, output_dir)。CV 时 split 取 cv{K}/fold{k}，且 output_dir
+    重定向到 OUTPUT_DIR/cv{K}——与单次划分的预测/权重完全隔离，绝不覆盖已冻结的单-split 结果。
+    """
+    base = REPO_ROOT / cfg["data"]["split_dir"]
+    if cv and cv >= 2:
+        if fold is None or not (0 <= fold < cv):
+            raise ValueError(f"--cv={cv} 需配合合法 --fold ∈ [0,{cv})")
+        return base / f"cv{cv}" / f"fold{fold}", OUTPUT_DIR / f"cv{cv}"
+    return base, OUTPUT_DIR
 
 
 def build_transforms(cfg: dict) -> tuple[transforms.Compose, transforms.Compose]:
@@ -98,6 +115,7 @@ def build_transforms(cfg: dict) -> tuple[transforms.Compose, transforms.Compose]
 
 def get_dataloaders(
     cfg: dict,
+    split_dir: Path,
     train_transform: transforms.Compose,
     eval_transform: transforms.Compose,
     resample_alpha: float | None = None,
@@ -106,7 +124,6 @@ def get_dataloaders(
     构建 train / val / test DataLoader（split 已由 build_ham10000_splits.py 按 lesion 级划分）。
     val/test 保持人群真实分布。resample_alpha 给定时对 train 用 WeightedRandomSampler 平衡（仅 train）。
     """
-    split_dir = REPO_ROOT / cfg["data"]["split_dir"]
     batch_size = cfg["training"]["batch_size"]
     num_workers = cfg["dataloader"]["num_workers"]
     pin_memory = cfg["dataloader"]["pin_memory"]
@@ -143,6 +160,7 @@ def main() -> None:
     cfg = load_config(CONFIG_PATH)
     seed = args.seed if args.seed is not None else cfg["training"]["seeds"][0]
     hparam = get_hparam_config(args.config_index)
+    split_dir, output_dir = resolve_paths(cfg, args.cv, args.fold)
 
     # 重采样：CLI 优先；缺省回落 config（仅当 resampling.enabled）
     resample_alpha = args.resample_alpha
@@ -151,17 +169,17 @@ def main() -> None:
 
     # 播种须在构建 loader（shuffle/sampler 依赖 RNG）之前
     seed_everything(seed)
-    print(f"Loading HAM10000 (malignant, image-only ERM)  "
-          f"resample={'OFF' if resample_alpha is None else resample_alpha}...")
+    print(f"Loading HAM10000 (malignant, image-only ERM)  split_dir={split_dir.name}  "
+          f"output_dir={output_dir.name}  resample={'OFF' if resample_alpha is None else resample_alpha}...")
     train_transform, eval_transform = build_transforms(cfg)
     train_loader, val_loader, test_loader = get_dataloaders(
-        cfg, train_transform, eval_transform, resample_alpha=resample_alpha,
+        cfg, split_dir, train_transform, eval_transform, resample_alpha=resample_alpha,
     )
     print(f"  Train: {len(train_loader.dataset):,} | Val: {len(val_loader.dataset):,} | "
           f"Test: {len(test_loader.dataset):,}")
 
     run_training(
-        dataset=DATASET, method=METHOD, output_dir=OUTPUT_DIR, cfg=cfg, hparam=hparam, seed=seed,
+        dataset=DATASET, method=METHOD, output_dir=output_dir, cfg=cfg, hparam=hparam, seed=seed,
         train_loader=train_loader, val_loader=val_loader, test_loader=test_loader,
         build_model=lambda: ResNet18Pretrained(num_classes=1),
         unpack_fn=unpack_sex_age, forward_fn=forward_image_only,

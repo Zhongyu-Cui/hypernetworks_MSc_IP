@@ -39,10 +39,12 @@ HAM10000 预处理（MEDFAIR 对齐版）：生成 benign/malignant 二分类任
             dx, dx_type, lesion_id, image_id
 """
 
+import argparse
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from sklearn.model_selection import GroupKFold, GroupShuffleSplit
 
 RANDOM_STATE = 42
 
@@ -312,8 +314,72 @@ def write_splits(splits: dict[str, pd.DataFrame], output_dir: Path) -> None:
         )
 
 
+def build_cv_folds(out: pd.DataFrame, n_folds: int) -> None:
+    """
+    lesion 级 GroupKFold 交叉验证划分（评审补强·路线 A）：每折以 1 折作 test（≈1/K≈20%），
+    其余 4 折为 train+val，再用 GroupShuffleSplit 从中按 lesion 切出 val（占总体≈10%），train≈70%。
+
+    动机（docs/results_summary.md R4.2 / 本轮路线 A）：HAM 单次 80/10/10 的 test 仅 995 张，
+    worst-group 落在 joint 小格（Female|80+ n_pos=4 等）进噪声地板，评估端功效不足、seed-ensemble
+    救不了。5 折 disjoint test 池化成全 9948 张 OOF 后，少数子群评估 n 放大约 K 倍（Female|80+
+    n_pos 4→~40），把 worst-group 从「评估-n 地板」抬起，是 Overall 侧 seed-ensemble 的公平侧对应。
+    同一 lesion_id 整组只进一折的 test/val/train（GroupKFold + GroupShuffleSplit 均按 lesion 分组），
+    杜绝同病灶多图跨 split 泄漏（与单次划分同一无泄漏原则）。
+
+    ⚠️ 与单次划分完全隔离：CV 折写入 cv{K}/ 子目录，训练时 output_dir 亦重定向到 outputs/ham10000/cv{K}/，
+    不覆盖已冻结的单-split 5-seed 结果（D3/D6）。age_group==-1（0-20）行保留在 CSV 中，
+    与单次划分一致——按 age 分组的模型/评估在上层过滤 age_group>=0。
+
+    Args:
+        out: 完整输出 DataFrame（需含 'lesion_id'，全 9948 行）。
+        n_folds: 折数（路线 A 用 5）。
+
+    输出:
+        data/splits/ham10000/cv{K}/fold{k}/{train,val,test}.csv
+    """
+    gkf = GroupKFold(n_splits=n_folds)
+    groups = out["lesion_id"].values
+    cv_root = OUTPUT_DIR / f"cv{n_folds}"
+    # val 目标占总体≈10%：trainval=(K-1)/K，故 val 占 trainval 的比例 = 0.10 / ((K-1)/K)
+    val_frac_within = SPLIT_FRACTIONS["val"] / (1.0 - 1.0 / n_folds)
+    print(f"\nlesion 级 {n_folds} 折 GroupKFold -> {cv_root}"
+          f"（每折 test≈{100 / n_folds:.0f}%，val≈{SPLIT_FRACTIONS['val']:.0%}，train≈其余）")
+    for k, (trainval_idx, test_idx) in enumerate(gkf.split(out, groups=groups)):
+        trainval = out.iloc[trainval_idx].reset_index(drop=True)
+        test = out.iloc[test_idx].reset_index(drop=True)
+        gss_val = GroupShuffleSplit(
+            n_splits=1, test_size=val_frac_within, random_state=RANDOM_STATE
+        )
+        tr_idx, va_idx = next(gss_val.split(trainval, groups=trainval["lesion_id"].values))
+        splits = {
+            "train": trainval.iloc[tr_idx].reset_index(drop=True),
+            "val": trainval.iloc[va_idx].reset_index(drop=True),
+            "test": test,
+        }
+        assert_no_lesion_leakage(splits)
+        fold_dir = cv_root / f"fold{k}"
+        print(f"[fold {k}]")
+        write_splits(splits, fold_dir)
+    # 交叉校验：5 折 test 并集恰覆盖全部 9948（disjoint 且完整），OOF 池化的正确性前提
+    test_sizes = []
+    for k in range(n_folds):
+        test_sizes.append(len(pd.read_csv(cv_root / f"fold{k}" / "test.csv")))
+    assert sum(test_sizes) == len(out), (
+        f"5 折 test 并集应=全数据集 {len(out)}，实得 {sum(test_sizes)}（{test_sizes}）"
+    )
+    print(f"OOF 完整性校验通过：{n_folds} 折 test 并集 = {sum(test_sizes)} = 全数据集 {len(out)}")
+
+
 def main() -> None:
     """主函数：依次执行筛选、标签处理、属性编码、划分、写出。"""
+    parser = argparse.ArgumentParser(description="构建 HAM10000 malignant 二分类 split")
+    parser.add_argument(
+        "--cv", type=int, default=0,
+        help="K 折 lesion 级 GroupKFold（路线 A 用 5）；0=只生成单次 80/10/10 划分（默认）。"
+             "二者可叠加：>0 时同时生成单次划分与 cv{K}/ 折划分（互不覆盖）。",
+    )
+    args = parser.parse_args()
+
     df = load_metadata(CSV_PATH)
     df = filter_valid_attributes(df)
     df = map_label(df)
@@ -330,6 +396,12 @@ def main() -> None:
     else:
         splits = split_random(split_df)
     write_splits(splits, OUTPUT_DIR)
+
+    # 可选：K 折 CV（路线 A：worst-group 评估端功效补强，lesion 级 GroupKFold）
+    if args.cv and args.cv >= 2:
+        if not GROUP_BY_LESION:
+            raise ValueError("CV 折依赖 lesion 分组防泄漏，须在 GROUP_BY_LESION=True 下生成")
+        build_cv_folds(split_df, args.cv)
 
     print("\n完成。配套图像 transform（源图 600×450，需 resize，对齐 MEDFAIR）：")
     print(

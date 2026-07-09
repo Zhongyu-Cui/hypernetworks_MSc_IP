@@ -204,6 +204,27 @@
 
 ---
 
+---
+
+## 路线 A. HAM 5 折 CV-OOF —— worst-group 的评估侧功效补强（R4.2 地板的评估侧对应解）
+
+> 建立/完成日期：2026-07-09。动机：R4.1 证 seed-ensemble 能救 Overall 却救不了 worst-group，
+> R4.2 诊断根因=评估端子群小样本（不可由 seed-ensemble 或扩 seed 解决，须**增评估样本**）。
+> 完整报告：`docs/routeA_ham_cv_oof_fairness.md`。
+
+- [x] A-1 HAM 5 折 lesion GroupKFold 划分 —— `build_ham10000_splits.py --cv 5`（`build_cv_folds` +
+      OOF 完整性断言，5 折 test 并集=9948）。（判据：cv5/fold{0..4} 无泄漏、并集全覆盖 ✅）
+- [x] A-2 4 训练脚本加 `--cv/--fold` + output 隔离 —— `train_ham10000_{resnet18,hyperhead,hyperfusion,
+      hyperadapt}.py` 的 `resolve_paths`（CV 产物写 outputs/ham10000/cv5/，不碰单-split D3/D6）。
+      （判据：resolve_paths 自检 + 单次路径不变 ✅）
+- [x] A-3 5 折重训（算力中性，复用 C1.5 Pareto 配置，每方法 5 折=原 5-seed 同 run 数）——
+      `slurm/c1_ham_cv_oof.sh` 作业 **70451–70454**（0 错误，b128 无 OOM）+ `derive_roc --output-dir .../cv5`。
+- [x] A-4 OOF 池化 worst-group 显著性 —— `scripts/ham_cv_oof_significance.py`（池化 n=9707 + 对齐断言 +
+      D-A1~D-A4）。**判决**：进噪声地板格 **3/14→0/14**（地板已移除）；地板移除后 **3 HN 的 worst-group
+      对 ERM 打平（点估计微负、CI 跨 0）、显著输 SWAD**，Overall 增益仍复现但 gap 更大 → **worst-group 公平
+      在 HAM 上获有功效的否定**（升级 D7-0：从「未达显著/疑似评估噪声」→「评估-n 地板移除后被证伪」）。
+
 **说明**：R1–R3 对应评审意见的「投入产出比最高的三件事」；R4/R5 是其配套的功效与表述补强；
-R0 是防回归的卫生项。完成 R1（合成剂量-反应）+ R3（MDE/CI）后，论点的必要方向转「稳」、
-充分方向获得现有设计唯一缺失的因果证据，届时方可将结论从「趋势一致」升级为「判据成立」。
+R0 是防回归的卫生项；路线 A 是 R4.2 遗留「评估-n 地板」的收口——把 worst-group 从「欠功效存疑」
+推进到**有功效的判决**（否定）。完成 R1（合成剂量-反应）+ R3（MDE/CI）+ 路线 A 后，充分方向的
+**Overall** 获因果+观测证实、**worst-group** 获有功效否定，必要方向弱-中支持，论点分向闭环。
