@@ -222,6 +222,8 @@ Pneumatic(IOP), Perkins, Pachymetry, Axial_Length, VF_MD`。
   留给 HN 的残余条件信号很小；加之 n=420 使 E1 的 MDE≈0.05 > age 点估计 0.011，**无力判定**
   是否残留可利用信号。这区别于 HAM10000（[[ham10000-conditional-mi-age-signal]] age 有可检测
   I(Y;age|X)>0、深层 HN 兑现收益）：**PAPILA age 更像「被图像吸收 + 样本不足」的不可判定区**。
+  🛑 **2026-07-19 反转**：新 OOF conditional V-information 闸门下，**PAPILA-age 反成全研究唯一 detected 的真实轴**
+  （+0.041 bits，CI>0），而 **HAM-age 退回未检出**——本段的对比关系已颠倒，见 `docs/conditional_v_information_gate.md`。
 - **决策**：sex 轴放弃 HN。age 轴是唯一候选但证据弱于 HAM，可低成本试一把 age-条件 HN
   作为验证，但需管理预期——baseline overall AUC 0.83 已不低，HN 大概率打平而非超过。
 

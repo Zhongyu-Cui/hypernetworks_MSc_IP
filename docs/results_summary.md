@@ -1,5 +1,20 @@
 # 超网络公平性比较 —— 结果汇总报告
 
+> 🛑🛑 **两处口径已过时，阅读前必读（2026-07-19）**
+> 1. **信号闸门**：已由本文 D2 的单-split 条件互信息改为 **OOF conditional V-information**
+>    （权威 = `docs/conditional_v_information_gate.md`）。**D2 表整体作废**——新读数：
+>    **HAM-age 退回「未检出」**（+0.0028 bits，CI 触 0，不再是「唯一正信号」）；Fitzpatrick ≈0；
+>    **CheXpert / MIMIC 全轴 CI<0 = 决定性 0**；**唯一 detected = PAPILA-age**（n=420）。
+> 2. **聚合口径**：本文性能数字为单-split / pooled 口径；主口径已改 **averaging + CV-OOF**
+>    （权威 = `docs/oof_regime_results.md`）。
+>
+> ⚠️ **对 D7 结论的实质影响**：D7-0「**充分方向**」原有两条证据线——(i) R1 合成剂量-反应（因果）、
+> (ii) HAM 自然信号的 Overall 增益（观测）。**第 (ii) 条已失效**：HAM-age 在新闸门下无可用信号，
+> 故其 Overall 增益应归于 **adapter 容量效应**而非「信号充分性兑现」。**充分方向现仅由 R1 合成实验支撑**
+> （R1 主动注入信号，不受闸门变更影响）。「必要方向」则**获得加强**（四库无可用信号 × HN 一律无实践收益，
+> 且 CheXpert/MIMIC 为决定性 0 而非「不可判定」）。
+
+
 > 生成日期：2026-07-03。本文件是比较协议（`docs/comparison_protocol.md`）**产出（第 6 节）**的落地。
 > 所有数字由 `scripts/build_results_tables.py` 从落盘预测 npz 统一重算，口径与训练/模型选择一致
 > （数据集感知 `subgroup_auc_vector` + `worst_and_gap` + Student-t 95%CI）。**ID 主口径 = overall
@@ -28,6 +43,12 @@
 
 ## D2 条件互信息 `I(Y;A|X)`（信号闸门，与性能并置）
 
+> 🛑 **本节整表作废（2026-07-19）**：闸门改为 OOF conditional V-information，见
+> `docs/conditional_v_information_gate.md`。最大变化：**HAM-age 由「确认>0 / 唯一正信号」退回「未检出」**；
+> CheXpert/MIMIC 由「不可判定 / 噪声地板」升级为 **决定性 0（CI 全 <0）**；PAPILA 由「灰区」变为
+> **唯一 detected 的真实轴**（+0.041 bits，n=420）。下表仅作历史记录保留。
+
+
 模型无关估计（冻结 baseline 特征 φ(X)，比较 `Y~φ(X)` vs `Y~[φ(X),A]` 的 held-out ΔNLL；
 int 模型 ΔNLL = `I(Y;A|X)` 估计，单位 nats；正控制探针 E3 已验证各数据集探针有功效）。
 
@@ -39,7 +60,7 @@ test 集 1000× bootstrap CI（各数据集 `conditional_mi.json` 的 `ci95_nats
 才算「确认 > 0」；CI 跨 0 = **不可判定（undecidable）**；负点估计且 CI 全 < 0 = 落在**噪声地板**
 （held-out ΔNLL 在 g 过拟合时向下偏，真值 ≈ 0）。
 
-| 数据集 | 敏感轴 | `I(Y;A|X)` 点估计 [95% CI]（nats） | 判定 |
+| 数据集 | 敏感轴 | `I(Y;A\|X)` 点估计 [95% CI]（nats） | 判定 |
 |--------|--------|-----------------------------------|------|
 | **HAM10000** | **age** | **+0.01379 [+0.00064, +0.02694]** | **确认 > 0（唯一正信号）** |
 | **HAM10000** | **sex×age joint** | **+0.01202 [+0.00009, +0.02395]** | **确认 > 0（含 age 轴）** |
@@ -117,7 +138,7 @@ D2 的 age 结果用的是二值化 @60 单一分箱。为排除「null 只是�
 
 每格为 5-seed 均值 ± 95%CI（Student-t）。worst-group = 数据集全子群向量的最小 AUC；gap = max−min。
 
-### HAM10000（sex + age；唯一 `I(Y;A|X)>0`）
+### HAM10000（sex + age；~~唯一 `I(Y;A|X)>0`~~ → 新闸门下 **未检出、≈0**，见顶部横幅）
 | 方法 | Overall AUC | Worst-group AUC | AUC gap |
 |------|-------------|-----------------|---------|
 | ERM | 0.8827 ± 0.0069 | 0.6988 ± 0.1526 | 0.2902 ± 0.1657 |
@@ -234,7 +255,7 @@ Pareto 反转只是**暴露该失误的契机**、非扩展的理由。此外加
 | HyperFusion | +0.0092 (p=0.254) | −0.0020 (p=0.317) | +0.0119 (p=0.251) |
 | HyperAdapt | +0.0186 (p=0.287) | +0.0074 (p=0.394) | +0.0212 (p=0.250) |
 
-**显著性结论（完整矩阵，D6-a/b/c）**：在 HAM（唯一 `I(Y;A|X)>0`）上，D6-a/b/c（5-seed 两层不确定度）
+**显著性结论（完整矩阵，D6-a/b/c）**：在 HAM（~~唯一 `I(Y;A|X)>0`~~ → 新闸门下 ≈0）上，D6-a/b/c（5-seed 两层不确定度）
 下**全部 3 HN × 3 基线、跨 canonical worst / 边缘 worst / Overall AUC 三种口径，无一对比达到 p<0.05**。但
 **点估计方向系统性为正**——3 HN 相对 ERM 在 Overall（+0.009~+0.019）与边缘 worst（+0.045~+0.084）上一致
 为正，符合 `I(Y;age|X)>0` 的预测方向；最接近显著的是 HyperHead/HyperAdapt 的 Overall vs ERM/ROC（p≈0.16~0.29）。
@@ -445,8 +466,10 @@ D6-HP 同时做 21 个假设检验（Overall AUC 9 + canonical worst 9 + 边缘 
   1. **R1 合成剂量-反应（因果）**：在单一数据集（MIMIC）内注入可控侧信道信号 `A_syn`，**Overall AUC 增益
      随实测 `I(Y;A_syn|X)` 严格单调上升**（Spearman ρ=+1.0；0 档干净打平；0.02/0.05/0.10 nats 档 ΔOverall
      ≈+.016/+.037/+.066，CI 排除 0）——把 iff 从跨数据集相关升级为**单数据集内因果剂量-反应**。
-  2. **HAM 自然信号（观测）**：唯一 `I(Y;age|X)>0` 的真实数据集上，3 HN 的 **Overall AUC 增益经 BH-FDR
-     多重校正后仍显著跑赢 ERM/ROC**（R4.1/R4.3，全局 FDR 存活 7/9，q≤0.034）。
+  2. ~~**HAM 自然信号（观测）**~~ 🛑 **已失效（2026-07-19）**：新 OOF V-info 闸门判 **HAM-age 未检出（≈0）**，
+     故该数据集不再是「唯一 `I(Y;age|X)>0` 的真实数据集」。3 HN 的 Overall AUC 增益（BH-FDR 后显著跑赢
+     ERM/ROC，R4.1/R4.3）**仍成立为观测事实**，但**不能再归因于属性信号充分性**——应归于 **adapter 容量效应**。
+     ⇒ **充分方向现仅由上条 R1 合成剂量-反应（因果）支撑。**
 
 - **⚠️ 关键限定（充分方向的边界）**：上述充分性证据**只在 Overall / 池化判别层面成立，不延伸到 worst-group
   公平**——R1 的 worst-group(A_syn) 增益平/微负（边际先验型信号只改池化判别、不改组内最差子群排序）。HAM 的

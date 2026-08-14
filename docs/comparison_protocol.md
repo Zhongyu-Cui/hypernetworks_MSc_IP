@@ -1,5 +1,13 @@
 # 比较协议（修订版）
 
+> 🛑 **信号闸门口径更新（2026-07-19）**：闸门已由单-split 条件互信息改为 **OOF conditional V-information**
+> （Xu 2020 / Hewitt 2021；权威 = `docs/conditional_v_information_gate.md`）。关键变化：
+> **HAM-age 由「唯一正信号」退回「未检出」**（+0.0028 bits，CI 触 0）；Fitzpatrick ≈0；
+> **CheXpert / MIMIC 全轴 CI<0 = 决定性 0**；唯一 detected 为 **PAPILA-age**（+0.041 bits，但 n=420）。
+> control task 五库全部通过 ⇒ 零读数非假阴。本文「HAM-age `I(Y;age|X)>0`」一族表述**已过时**（下方已内联订正）；
+> 各处**结论方向不变**，但「有信号」前提须按新闸门重读。
+
+
 > 定稿日期：2026-07-01。替代 interim report §3.1.3。本文件是实验设计的**权威规格**；
 > 精简版进度表见根目录 `CLAUDE.md`「比较协议与进度」节。
 
@@ -10,21 +18,36 @@
 在信号存在处（HAM-age）验证增益，在信号缺失处解释 null result。conditional-MI 估计
 `I(Y;A|X)` 由旁支**升为贯穿性解释变量**，与性能结果并列报告。
 
-## 1. 对比方法（6 个：3 基线 + 3 HN）
+## 1. 对比方法（7 个：4 基线 + 3 HN）
 
 | # | 方法 | 类型 | 用属性 | 属性介入位置 | 角色 |
 |---|------|------|--------|-------------|------|
 | 1 | ResNet-18 (ERM) | 基线 | ✗ | — | 参照零点 |
 | 2 | SWAD | 基线 | ✗ | 训练（权重平均） | SOTA 锚点 / 域泛化 |
 | 3 | ROC (Reject-Option) | 基线 | ✓ | 决策边界后处理 | 属性感知、最浅介入 |
-| 4 | HyperHead | HN | ✓ | 分类头权重 | 浅层 HN |
-| 5 | HyperAdapt | HN | ✓ | 各层低秩残差（除 stem） | 深层 HN（介入最遍布） |
-| 6 | HyperFusion | HN | ✓ | 末层 downsampling 权重 | 中层 HN（单 block） |
+| 4 | **GroupDRO** | **基线** | **✓** | **训练损失（组重加权）** | **属性感知、非条件化对照** |
+| 5 | HyperHead | HN | ✓ | 分类头权重 | 浅层 HN |
+| 6 | HyperAdapt | HN | ✓ | 各层低秩残差（除 stem） | 深层 HN（介入最遍布） |
+| 7 | HyperFusion | HN | ✓ | 末层 downsampling 权重 | 中层 HN（单 block） |
 
 - **ROC 复用 ERM 的已训练模型**做后处理，不单独训练。
 - **SWAD 不与 HN 组合**，仅作独立基线（ERM 训练 + 权重平均）。
+- **GroupDRO（Sagawa et al., ICLR 2020）单独训练**（自己的 6 配置搜索），实现见
+  `src/training/harness/groupdro.py`。**加入动机（2026-08-11，导师建议）**：原三基线里 ERM/SWAD
+  完全不看属性、ROC 只做事后阈值调整 ⇒「训练时用子群标签」这一格里只有 3 个 HN，
+  「HN 用属性 vs 基线不用属性」是**混淆对比**。GroupDRO 填的正是「用属性但**不条件化函数**」一格：
+
+  |               | 不用属性     | 用属性                                |
+  |---------------|-------------|--------------------------------------|
+  | 改损失/权重    | ERM, SWAD   | **GroupDRO**                         |
+  | 改决策阈值     | —           | ROC                                  |
+  | 改函数（条件化）| —           | HyperHead / HyperFusion / HyperAdapt |
+
+  二者对信号的要求不同且可检验：conditioning 要兑现增益**必须** `I(Y;A|X)>0`；reweighting
+  **不需要**条件信号（只是拿 Overall 换 worst-group）。故「四个 null 数据集上 HN 打平 ERM 而
+  GroupDRO 仍抬 worst-group」是本协议对闸门论证的一次 out-of-sample 检验。
 - 属性介入深度递增（ROC→Head→Fusion→Adapt），构成「属性用在越深处是否越有效」对照轴，
-  服务 interim report §3.1.4 第 3 个研究问题。
+  服务 interim report §3.1.4 第 3 个研究问题。GroupDRO **不在该深度轴上**（它不介入函数）。
 - `attrconcat` **移出主协议**（不属三设计之一），仅作可选 ablation。
 
 ## 2. 数据集 × 敏感属性 × OOD
@@ -135,6 +158,12 @@ worst-group AUC 与 AUC gap 的 per-dataset 排名**（不做跨数据集聚合�
 - [x] C1.6 选定配置 5-seed 确认训练 —— 作业 **69607**(ERM+SWAD,gpus24) / **69608**(HyperHead,gpus24) / **69609**(HyperFusion,gpus24) / **69610**(HyperAdapt,gpus48 b128 等-batch)，array 0–4=seed42-46；ERM seed45 遇 semois GPU 故障(89min/epoch)已排除 semois 重跑(69643)。5 方法各 5 seed 预测齐全
 - [x] C1.7 派生 SWAD（ERM 配置 + 权重平均，5 seed）—— 含在 C1.6 的 ERM 确认（作业 69607/69643 带 SWAD=1），5 seed 平均权重 + overall 预测齐全
 - [x] C1.8 派生 ROC（ERM 5-seed 预测后处理）—— `derive_roc --dataset ham10000 --config-tag lr1e-04_wd1e-04`，5 seed 全部落盘 `roc_lr1e-04_wd1e-04_seed4?_overall.npz`（二分轴=age，θ* val 选定恒不劣 ERM）
+- [x] **C1.9 GroupDRO 基线（§1 新增第 4 基线，导师建议）** —— 实现 `harness/groupdro.py` +
+  `train_ham10000_groupdro.py`；作业 **75498**（gpus24，6 config × 5 折 = 30/30 成功）；折均
+  marginal-worst 选定 `lr3e-04_wd1e-03`；averaging 评估已并入 `oof_results_averaging.json`。
+  **结论：Overall 显著劣于 ERM（−0.0124）、worst-group 未抬（canon −0.006 / marg +0.015 均 n.s.）；
+  3 HN vs GroupDRO 的 worst-group 全 n.s. 而 Overall 显著更优 ⇒「HN 靠属性占便宜」的混淆被解除。**
+  完整报告见 `docs/groupdro_baseline_ham.md`
 
 **C2 MIMIC-CXR**
 - [x] C2.1 ERM 超参搜索训练（6 配置）—— seed42 全 6 配置预测齐全（Pareto 见 C2.5）
@@ -145,6 +174,7 @@ worst-group AUC 与 AUC gap 的 per-dataset 排名**（不做跨数据集聚合�
 - [x] C2.6 选定配置 5-seed 确认训练 —— 作业 **69707**(ERM+SWAD) / **69708**(HyperHead) / **69709**(HyperFusion,gpus24) / **69710**(HyperAdapt,gpus48)，array 0–4=seed42-46，已排除 semois；5 方法 × 5 seed 预测齐全
 - [x] C2.7 派生 SWAD（5 seed）—— 含在 C2.6 的 ERM 确认（69707 带 SWAD=1），5 seed overall 预测齐全
 - [x] C2.8 派生 ROC（后处理）—— `derive_roc --dataset mimic --config-tag lr3e-04_wd1e-03 --output-dir outputs/mimic_cxr`（⚠️ subgroup 键=`mimic` 但 outputs 目录=`mimic_cxr`，须显式 --output-dir；HAM 因同名未暴露）。5 seed 全落盘，θ* 多为 0/极小=模型已均衡无腾挪空间
+- [x] **C2.9 GroupDRO 基线（§1 第 4 基线）** —— 通用入口 `train_groupdro.py`（GDRO_DATASET=mimic），作业 **75529**（6 config × 5 折 = 30/30 成功）；折均 marginal-worst 选定 `lr3e-04_wd1e-04`；averaging 已并入 `oof_results_averaging.json`。**结论：**三指标全部显著劣于 ERM**（Overall −0.0079 / canon worst −0.0094 / marg −0.0082）；14 个子群一致下降 ~0.008、**无任何重分配** = I(Y;A|X)≈0 的指纹；3 HN 相对 GroupDRO 全指标显著更优**。汇总见 `docs/groupdro_baseline_5datasets.md`
 
 **C3 CheXpert**
 - [x] C3.1 ERM 超参搜索训练（6 配置）—— 作业 **69762**（gpus24）
@@ -155,6 +185,7 @@ worst-group AUC 与 AUC gap 的 per-dataset 排名**（不做跨数据集聚合�
 - [x] C3.6 选定配置 5-seed 确认训练 —— 作业 **69792**(ERM+SWAD) / **69793**(HyperHead) / **69794**(HyperFusion,gpus24) / **69795**(HyperAdapt,gpus48)，array 0–4=seed42-46，已排除 semois；5 方法 × 5 seed 预测齐全，0 错误日志、节点无 semois
 - [x] C3.7 派生 SWAD（5 seed）—— 含在 C3.6 的 ERM 确认（69792 带 SWAD=1），5 seed overall 预测齐全
 - [x] C3.8 派生 ROC（后处理）—— `derive_roc --dataset chexpert --config-tag lr3e-04_wd1e-03 --output-dir outputs/chexpert_cxr`，5 seed 全落盘 `roc_lr3e-04_wd1e-03_seed4?_overall.npz`（自动选轴 age×4/sex×1，θ* val 上恒不劣 ERM；test 上 Overall 略降、gap 无稳健收窄=模型已近均衡、与 CheXpert I(Y;A|X)≈0 一致）
+- [x] **C3.9 GroupDRO 基线（§1 第 4 基线）** —— 通用入口 `train_groupdro.py`（GDRO_DATASET=chexpert），作业 **75530**（6 config × 5 折 = 30/30 成功）；折均 marginal-worst 选定 `lr1e-04_wd1e-03`；averaging 已并入 `oof_results_averaging.json`。**结论：**三指标全部显著劣于 ERM**（−0.0136 / −0.0201 / −0.0162）；q 极端集中（单组 0.48–0.62）提示 η 偏大；3 HN 相对 GroupDRO 全指标显著更优**。汇总见 `docs/groupdro_baseline_5datasets.md`
 
 **C4 Fitzpatrick17k**
 - [x] C4.1 ERM 超参搜索训练（6 配置）—— 作业 **69814**（gpus24），全 6/6 完成，val overall AUC 0.914–0.923
@@ -165,6 +196,7 @@ worst-group AUC 与 AUC gap 的 per-dataset 排名**（不做跨数据集聚合�
 - [x] C4.6 选定配置 5-seed 确认训练 —— 作业 **69838**(ERM+SWAD,gpus24) / **69839**(HyperHead,gpus24) / **69840**(HyperFusion,gpus24) / **69841**(HyperAdapt,gpus48 b128 等-batch)，array 0–4=seed42-46，已排除 semois；5 方法 × 5 seed 预测齐全、0 错误
 - [x] C4.7 派生 SWAD（5 seed）—— 含在 C4.6 的 ERM 确认（69838 带 SWAD=1），5 seed overall 预测齐全
 - [x] C4.8 派生 ROC（5-seed 后处理）—— `derive_roc --dataset fitzpatrick --config-tag lr1e-04_wd1e-03`，5 seed 全落盘（二分轴=skin，θ* val 上恒不劣 ERM；test Overall/worst/gap 几乎不动=无腾挪空间）。**6 方法 5-seed test 汇总（null 结果）**：ERM Overall0.895/worst0.785/gap0.153；SWAD 0.911/0.781/0.167；ROC≡ERM；HyperHead 0.889/0.772/0.157；HyperFusion 0.881/0.747/0.186（fairness 最差、与 HAM 相反）；HyperAdapt 0.902/0.817/0.121（名义最优但 worst std±0.069 极大不稳健）。各法 worst CI 大幅重叠、Pareto val-worst 排序未传导到 test=小子群 val→test 噪声，与 I(Y;skin|X)≈0 打平预期一致
+- [x] **C4.9 GroupDRO 基线（§1 第 4 基线）** —— 通用入口 `train_groupdro.py`（GDRO_DATASET=fitzpatrick），作业 **75531**（6 config × 5 折 = 30/30 成功）；折均 marginal-worst 选定 `lr1e-04_wd1e-04`；averaging 已并入 `oof_results_averaging.json`。**结论：**唯一「正确形状」的重分配**：型VI 0.816→0.858（+0.042，n.s.）、gap 0.090→0.055（全方法最低），Overall −0.003 n.s.；仍无显著 worst-group 收益**。汇总见 `docs/groupdro_baseline_5datasets.md`
 
 **C5 PAPILA** — ⚠️ **regime 决策：全 CV（用户裁定 2026-07-03）**。PAPILA test≈84 眼极小，
 `docs/papila_preprocessing_plan.md` 明确以患者级 5 折 GroupKFold 取代单次 split。C5 走「6 配置 × 5 折都跑」：
@@ -181,12 +213,15 @@ Pareto 用 `scripts/select_pareto_papila_cv.py`（先按 config 跨 5 折聚合�
 - [x] C5.6 选定配置确认（全-CV：选定 config 的 5 折已在搜索中训完，无需新作业）
 - [x] C5.7 派生 SWAD（逐折）—— ERM 搜索 69860 带 SWAD=1，30/30 SWAD 预测齐全（选定 config lr3e-04_wd1e-04 的 5 折即用）
 - [x] C5.8 派生 ROC（逐折后处理）—— `derive_roc --dataset papila --config-tag lr3e-04_wd1e-04`，5 折全落盘（轴=age，θ*=0 全折 ROC≡ERM=无腾挪）。**6 方法 OOF 池化(n=420) test**：ERM Overall0.841/worst0.798/gap0.060；SWAD 0.859/**0.831**/0.046(worst 最优)；ROC≡ERM；HyperHead 0.811/0.742/0.103；HyperFusion 0.796/**0.670**/0.192(退化最重)；HyperAdapt **0.860**/0.811/0.063(Overall 最优、打平 baseline)。**无 HN 稳健改善公平**：HyperAdapt 打平 ERM/SWAD、HyperHead/HyperFusion 退化。⚠️ **R3.3 订正**：PAPILA 探针在 n=420 下不可靠（剂量-反应非单调，见 results_summary D2-MDE），`I(Y;A|X)` **不可判定=灰区**，**已退出 null 证据集**——此处性能打平仅作趋势旁证、不作 null 判决支撑（区别于 MIMIC 真值≈0 / CheXpert·Fitz 未达 MDE；区别于 HAM 弱正）
+- [x] **C5.9 GroupDRO 基线（§1 第 4 基线）** —— 通用入口 `train_groupdro.py`（GDRO_DATASET=papila），作业 **75532**（6 config × 5 折 = 30/30 成功）；折均 marginal-worst 选定 `lr3e-04_wd1e-03`；averaging 已并入 `oof_results_averaging.json`。**结论：全指标 n.s.（canon worst −0.037）；⚠️ 仅 ~75 步 q 更新、q∈[0.236,0.270] 几乎不动 ⇒ 实质是组均衡 ERM，**不作为 GroupDRO 本身的证据****。汇总见 `docs/groupdro_baseline_5datasets.md`
 
 **C6 OOD 评估（CXR）** —— 驱动 `src/training/run_ood_cxr_all.py`（复用 A5 `evaluate_ood`）+ `slurm/c6_ood_cxr.sh`；
 5 方法(ERM/SWAD/3HN，ROC 属分数后处理不在此) × 5 seed × 2 方向 = 50 次推理，用确认配置 checkpoint
 （SWAD=_averaged，余=_best_overall），OOD 预测落盘 `outputs/ood_cxr/<src>2<tgt>/`。作业 **69980**（gpus，both 双向）。
 - [x] C6.1 MIMIC→CheXpert OOD 评估 —— 作业 **69980**（gpus），25/25 落盘。**5-seed 均值**：ERM Overall0.853/worst0.817/gap0.045；SWAD 0.853/0.811/0.051；HyperHead 0.855/0.819/0.045；HyperFusion 0.852/0.810/0.055；HyperAdapt 0.856/0.818/0.049。全法 ±1σ 内重叠，HN≈baseline
 - [x] C6.2 CheXpert→MIMIC OOD 评估 —— 作业 **69980**（gpus），25/25 落盘。**5-seed 均值**：ERM Overall0.811/worst0.786/gap0.042；**SWAD 0.821/0.797/0.038（微弱领先，符域泛化设计）**；HyperHead 0.813/0.788/0.042；HyperFusion 0.815/0.790/0.042；HyperAdapt 0.816/0.791/0.041。**无 HN 稳健改善 OOD 泛化/公平**，与 MIMIC/CheXpert I(Y;A|X)≈0（无条件信号可利用）一致；SWAD 作为域泛化锚点在 C→M 有小幅优势
+
+- [x] **C6.3 GroupDRO 双向 OOD（OOD v2 偏离 #3 的第四臂）** —— 训练作业 **75757**(MIMIC)/**75778**(CheXpert) 补 trial 1/2，推理作业 **75829**（full-target 双向，各 15 replicate，30/30 落盘）。**H5 决定性否定：两方向 marginal-worst 与 Overall 均显著劣于 ERM**（marg −0.0069 / −0.0061；Overall −0.0077 / −0.0055），**C→M 的 Overall 降幅是整个 OOD v2 唯一 \|d̄\|>σ_train 的效应**（正面效应至今无一超噪声）。Holm family 4→6 后既有 4 项全部保持显著、既有数字逐位不变。⇒ **「HN 靠属性占便宜」的替代解释在 ID 与 OOD 两个 regime 均被排除**。报告 `docs/ood_experiment_v2_groupdro.md`
 
 ### D. 汇总与写作（在 `docs/` 单独建 md 报告）—— 全部完成，报告 `docs/results_summary.md`；数据由 `scripts/build_results_tables.py` 统一重算
 - [x] D1 建立 `docs/results_summary.md` 报告框架 —— 含 D1 论点 + D2–D7 全表；主口径 overall 选择、5-seed±95%CI
@@ -196,6 +231,7 @@ Pareto 用 `scripts/select_pareto_papila_cv.py`（先按 config 跨 5 折聚合�
 - [x] D5 生成子群公平度量表 —— worst-group/gap 已并入 D3 各表；HAM 另报边缘 vs joint 口径隔离小格噪声
 - [x] D6 生成数据集内显著性 —— **完整 3 HN × 3 基线矩阵**（此为比较协议正确设计=全方法×全基线；协议 §5 一度缩到「仅 HF」系**规格失误**、C 阶段重训时已订正，**非** Pareto 反转后的数据驱动探索扩展/forking-path，Pareto 反转仅是暴露契机；另加边缘 worst 口径隔离 joint 小格噪声）：worst-group 配对 bootstrap（canonical + 边缘）+ Overall DeLong。**5-seed 口径 D6-a/b/c 无一 p<0.05**（方向系统性为正）；**R4.1 更高功效补强 D6-HP + R4.3 BH-FDR：Overall AUC 全 3 HN 显著赢 ERM/ROC（全局 FDR 存活 7/9），worst-group 仍 n.s.（瓶颈=评估端 joint 小样本 R4.2，非 seed 数）**
 - [x] D7 撰写结论 —— 核心论点成立（唯 HAM 有信号且方向正确）但增益被小样本压制；4 null 数据集干净打平；SWAD 是无信号时的稳健公平基线；介入深度非决定因素
+- [x] **D8 实验总览（跨实验串联叙事）** —— `docs/experiments_overview.md`（2026-08-14）。把最终成立的四组实验按逻辑结构串成一条证据链：**ID CV-OOF regime（5 库 × 7 方法）→ OOD 实验 v2（双向 · 15 replicate · σ_train · 属性 knockout）→ 受控条件化范围消融（E0–E4）→ HyperAdapt×SWAD 融合（2×2）**，含 GroupDRO 第四基线的双 regime 排除性证据与四条方法学产出（pooled-AUC 负偏 / bootstrap 不含训练噪声 / 差中差须匹配 config / DRO 目标-指标错配）。⚠️ ID 数字一律以 `outputs/conditioning_ablation/oof_results_averaging.json`（2026-08-11）为准——`oof_regime_results.md` 的 **HyperAdapt 一列**因 2026-08-04 预测重写而略有失配（如 MIMIC Δmarg-worst 该文 +0.0022 vs JSON +0.0014），**方向与判决未变**
 
 **起手顺序**：A0.1 → A0.2 → A0.3 → A0.4 → A1.1 → A1.2 → A2.1–A2.3（A0 是前提；让重训一次
 到位地产出 Pareto 可选、可做显著性的候选池，避免重训两遍）→ A3/A4/A5 → B → C（HAM 优先）→ D。
@@ -217,5 +253,8 @@ Pareto 用 `scripts/select_pareto_papila_cv.py`（先按 config 跨 5 折聚合�
 > HyperHead/HyperAdapt 后，五数据集的 ERM + 3 HN 训练脚本已全部就位；SWAD/ROC 为 harness 派生
 > （A3/A4，数据集无关），无需逐数据集补脚本。至此 C 阶段统一重训所需的代码层已完整。
 
-conditional-MI（`I(Y;A|X)`，与模型选择无关，**可复用**）：五数据集均已估计。仅
-**HAM-age > 0**，余者 ≈ 0（含 MIMIC / CheXpert / Fitzpatrick，均低于检出地板）。
+信号闸门（与模型选择无关，**可复用**）：五数据集均已估计。
+🛑 **2026-07-19 口径更新**：已由单-split 条件互信息改为 **OOF conditional V-information**
+（权威 `docs/conditional_v_information_gate.md`）。新读数：**唯 PAPILA-age detected**（+0.041 bits，n=420）；
+**HAM-age 退回未检出（≈0）**；Fitzpatrick ≈0；**CheXpert / MIMIC 全轴 CI<0 = 决定性 0**。
+（旧表述「仅 HAM-age > 0，余者 ≈ 0」已作废。）

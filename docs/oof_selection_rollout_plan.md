@@ -42,26 +42,27 @@
 
 ## 2. Phase S — 选择/评估基础设施（数据集无关，一次实现，最高优先）
 
-- [ ] **S1 折均 marginal-worst 选择器** `scripts/select_config_cv.py`
+- [x] **S1 折均 marginal-worst 选择器** `scripts/select_config_cv.py` ✅ 2026-07-10
       读 `outputs/<ds>/cv5/val_logs/` → 逐 config 对 5 折的 **val marginal-worst**（子群向量丢 `|` 键取 min）
       求折均 → minimax 选最高，平手用折均 val Overall 破 → 打印选定 config_tag。参考 `select_pareto_papila_cv.py`
       （把 canonical 改 marginal + dataset 参数化）。**判据**：5 数据集通用、`--self-test` 通过、对 HAM 输出一个确定 config。
-- [ ] **S2 通用 OOF 报告器** `scripts/cv_oof_report.py`
+      （实现：纯 argmax(marginal-worst, overall)；`--write-json` 落选定配置供 S2 消费；HAM 选定 erm=lr3e-04_wd1e-03 等，
+      订正了路线 A 复用单-split 的捷径。）
+- [x] **S2 通用 OOF 报告器** `scripts/cv_oof_report.py` ✅ 2026-07-10
       泛化 `ham_cv_oof_significance.py`：`--dataset` 参数化 → 池化选定 config 的 5 折 test 预测 → OOF 完整性断言
       （并集=全集、y_true 逐元素对齐）→ 算 canonical worst / marginal worst / Overall / gap → 样本级配对 bootstrap
       （HN/SWAD/ROC vs ERM）+ Overall DeLong。**判据**：HAM 复现 `routeA` 的 D-A1 数字（ERM Overall 0.874 等）。
+      （回归验证：旧配置下 ROC 精确复现 0.8696；ERM/HN 因作业 70771–74 重训而略变 = 管线正确。`--config-json`/`--config` 消费选定配置。）
 - [ ] **S3（可选）** 把 marginal+3ep-MA 稳健信号并入 `selection_strategy_probe.py`（`--signal {canonical,marginal,marginal_ma}`），供选择信号诊断，非主链必需。
 
 ---
 
 ## 3. Phase D — CV 折生成（build 脚本加 --cv 5）
 
-- [ ] **D1** `build_mimic_splits_nofinding.py --cv 5`：**患者级 GroupKFold**（`subject_id` 分组），
-      生成 `data/splits/mimic_cxr_nofinding/cv5/fold{0..4}/{train,val,test}.csv`，断言 5 折 test 并集=全集、无患者跨折。
-- [ ] **D2** `build_chexpert_splits_nofinding.py --cv 5`：同 D1（`subject_id` 分组，chexpert_nofinding/cv5/）。
-- [ ] **D3** `build_fitzpatrick_splits.py --cv 5`：**图像级 KFold**（Fitz 无 patient_id、每 md5hash 唯一，无泄漏），
-      生成 `data/splits/fitzpatrick/cv5/`，断言并集=16012。
-      （HAM/PAPILA 的 `build_*_splits.py --cv 5` 与 `build_cv_folds` 可作模板。）
+- [x] **D1** `build_mimic_splits_nofinding.py --cv 5` ✅ 2026-07-10：患者级 GroupKFold（`patient_id` 分组），生成 `data/splits/mimic_cxr_nofinding/cv5/fold{0..4}/`，断言 5 折 test 并集=199356=全集、折内无患者跨 split（正例率 ~30%）。
+- [x] **D2** `build_chexpert_splits_nofinding.py --cv 5` ✅ 2026-07-10：患者级 GroupKFold（`patient_id` 分组），生成 `data/splits/chexpert_nofinding/cv5/fold{0..4}/`，断言 5 折 test 并集=138644=全集、折内无患者跨 split。
+- [x] **D3** `scripts/build_fitzpatrick_cv_splits.py`（实验 F 遗留，图像级 StratifiedKFold）：✅ CV 折已在
+      `data/splits/fitzpatrick17k/cv5/fold{0..4}/`，已验证并集=16012、5 折 test disjoint、折内互斥。
 
 ---
 
@@ -70,9 +71,9 @@
 仿 `train_ham10000_*.py` / `train_fitzpatrick_resnet18.py` 的 `resolve_paths`（CV 产物写 `outputs/<ds>/cv5/`，
 不碰单-split 结果；seed=42+fold）。
 
-- [ ] **T1** `train_mimic_{resnet18,hyperhead,hyperfusion,hyperadapt}.py` 加 `--cv/--fold`（4 脚本）。
-- [ ] **T2** `train_chexpert_{...}.py` 加 `--cv/--fold`（4 脚本）。
-- [ ] **T3** `train_fitzpatrick_{hyperhead,hyperfusion}.py` 加 `--cv/--fold`（2 脚本；resnet18/hyperadapt 已有）。
+- [x] **T1** `train_mimic_{resnet18,hyperhead,hyperfusion,hyperadapt}.py` 加 `--cv/--fold` ✅ 2026-07-10（镜像 resolve_paths，CV 产物写 outputs/mimic_cxr/cv5/；语法+--cv 已验证）。
+- [x] **T2** `train_chexpert_{resnet18,hyperhead,hyperfusion,hyperadapt}.py` 加 `--cv/--fold` ✅ 2026-07-10（镜像 resolve_paths，CV 产物写 outputs/chexpert_cxr/cv5/；语法+--cv 已验证）。
+- [x] **T3** `train_fitzpatrick_{hyperhead,hyperfusion}.py` 加 `--cv/--fold` ✅ 2026-07-10（resnet18/hyperadapt 已有；镜像 resolve_paths，CV 产物写 cv5/，语法+--help 已验证）。
 
 ---
 
@@ -82,27 +83,26 @@
 > （HyperAdapt bs128 → gpus48）；**`--exclude=semois`**；**预先报告** + **提交后查状态**（节点故障换 `--nodelist`）。
 > 每方法一次提交 = array 0–29（6 config × 5 折）；ERM 带 `SWAD=1` 逐折派生；ROC 用 `derive_roc --output-dir .../cv5` 逐折后处理。
 
-- **R-HAM**（数据已备，仅需 S1/S2）
+- **R-HAM**（数据已备，仅需 S1/S2）✅ 2026-07-10（结果见 `docs/oof_regime_results.md`）
   - [x] 6-config × 5 折 CV 搜索（作业 **70771–74**，120 run，0 错误）
-  - [ ] S1 折均 marginal-worst 重选 config（**订正路线 A 复用单-split config 的捷径**）
-  - [ ] S2 出 OOF 报告（canonical worst + 显著性）
-- **R-PAPILA**（全-CV 已备，仅切换选择信号）
-  - [ ] S1 marginal-worst 重选（原 `select_pareto_papila_cv.py` 用 canonical）
-  - [ ] S2 出 OOF 报告
-- **R-Fitzpatrick**（便宜；需 D3 + T3 先就位）
-  - [ ] 新建 `slurm/c4_fitz_cv_search.sh`（仿 `c1_ham_cv_search.sh`）
-  - [ ] 提交 4 方法 6×5 CV 搜索（gpus24；HyperAdapt bs 等-batch → gpus48）
-  - [ ] S1 选 + S2 报
-- **R-CheXpert**（~50 GPU-时；需 D2 + T2）
-  - [ ] 新建 `slurm/c3_chexpert_cv_search.sh`
-  - [ ] 提交 4 方法 6×5 CV 搜索
-  - [ ] S1 选 + S2 报
-- **R-MIMIC**（~180 GPU-时，最后；需 D1 + T1）
-  - [ ] 新建 `slurm/c2_mimic_cv_search.sh`
-  - [ ] 提交 4 方法 6×5 CV 搜索（分批，避免占满配额）
-  - [ ] S1 选 + S2 报
-  - [ ] ⚠️ **OOD 不变**：MIMIC↔CheXpert OOD 用各自 OOF-选定 config 的**逐折 checkpoint** 跨库评估
-        （`eval_ood_cxr.py`），OOF 池化仅用于 ID；OOD 另算。
+  - [x] S1 折均 marginal-worst 重选 config（订正捷径：erm→lr3e-04_wd1e-03、hyperfusion→lr1e-04_wd1e-04、hyperadapt→lr3e-05_wd1e-04）
+  - [x] S2 出 OOF 报告（canonical worst + 显著性）。**判决：config 修正未推翻路线 A**——HyperFusion worst-group 单点转正但配对 bootstrap n.s.；SWAD 仍最强；HyperFusion 仅 Overall 对 ERM 显著 +0.011。ROC 对新 config 重派生；删除未选中 config checkpoint 释放 12.35 GB。
+- **R-PAPILA**（全-CV 已备，仅切换选择信号）✅ 2026-07-10（结果见 `docs/oof_regime_results.md`）
+  - [x] S1 marginal-worst 重选（erm/hyperhead/hyperfusion=lr3e-04_wd1e-04、hyperadapt=lr3e-04_wd1e-03；ROC 已最新无需重派）
+  - [x] S2 出 OOF 报告。**判决同 HAM/路线 A**：全 3 HN worst-group ≤ ERM 且 n.s.（n=420 功效低）、SWAD 最强、无 HN Overall 赢；joint 小格 Male|≤60(n_pos4) 仍进地板→公平以 marginal 口径读。删除未选中 config checkpoint 释放 12.35 GB。
+- **R-Fitzpatrick**（便宜；需 D3 + T3 先就位）✅ 2026-07-10（结果见 `docs/oof_regime_results.md`）
+  - [x] 新建 `slurm/c4_fitz_cv_search.sh`（仿 `c1_ham_cv_search.sh`）
+  - [x] 提交 4 方法 6×5 CV 搜索（作业 **70963–66**，120 run，0 错误；HyperAdapt bs128 等-batch → gpus48）
+  - [x] S1 选（erm=lr3e-04_wd1e-03 等）+ ROC 派生 + S2 报。**判决同 HAM/PAPILA/路线 A**：论文本尊数据集上全 3 HN worst-group 对 ERM 仅 +0.004~0.011 且 n.s.、对 SWAD 一律显著劣；仅 HyperFusion Overall +0.013 显著。删除未选中 config checkpoint 释放 12.35 GB。
+- **R-CheXpert**（~50 GPU-时；需 D2 + T2）✅ 2026-07-10（结果见 `docs/oof_regime_results.md`）
+  - [x] 新建 `slurm/c3_chexpert_cv_search.sh`
+  - [x] 提交 4 方法 6×5 CV 搜索（作业 **71099–71102**，120 run，0 错误）
+  - [x] S1 选（erm=lr1e-04_wd1e-04 等）+ ROC 派生 + S2 报。**判决：最弱信号数据集（I(Y;A|X)≈0）上 HN 对 ERM 在 Overall 与 marginal worst-group 均统计显著为负（Δ≈−0.005，n=138k 使微差可检出，实际可忽略）**；SWAD 打平 ERM 仍优于 HN。坐实充分性反方向。删除未选中 config checkpoint 释放 12.35 GB。
+- **R-MIMIC**（~180 GPU-时，最后；需 D1 + T1）—— ID 完成 ✅ 2026-07-12（结果见 `docs/oof_regime_results.md`）
+  - [x] 新建 `slurm/c2_mimic_cv_search.sh`
+  - [x] 提交 4 方法 6×5 CV 搜索（作业 **71235–71238**，120 run；1 瞬时 IO 故障换节点重跑 71395 补齐）
+  - [x] S1 选（erm 等=lr1e-04_wd1e-04、hyperadapt=lr1e-04_wd1e-03）+ ROC 派生 + S2 报（sig 用 1000 次 = 作业 71587，n=199k 上 2000 次超时限）。**判决：唯一出现 HN 显著 worst-group 赢的数据集——HyperAdapt(最深) marginal worst +0.003 显著优 ERM、Overall +0.0015 显著优，但幅度可忽略且对 SWAD 不赢；HyperHead(最浅)显著劣。SWAD 不败。** 删除未选中 config checkpoint 释放 12.35 GB（保留选定 config 供 OOD）。
+  - [x] ✅ **OOD（双向）2026-07-13**：`run_ood_cxr_cv.py`（source cv5 逐折 checkpoint → target cv5 逐折 test 池化=target OOF）+ `build_target_test_loader(cv/fold)` + `slurm/c5_ood_cv.sh`；作业 71635（推理）+ 71668/71669（sig 1000 次）。**判决：强烈方向不对称——MIMIC→CheXpert 深层 HN(HyperFusion/HyperAdapt) marginal worst-group 显著超 ERM 与 SWAD、HyperAdapt Overall 亦然（全研究唯一 HN 稳健胜 SWAD 处）；CheXpert→MIMIC 全 HN 显著输。赢的方向=属性信号源(MIMIC I(Y;A|X)>0)方向。** ⚠️ **本条已双重作废**：(a) averaging 口径推翻「强烈方向不对称」(见 `oof_regime_results.md` §2)；(b) 新 OOF V-info 闸门判 **MIMIC 全轴决定性 0**，不存在「属性信号源方向」。 详见 `docs/oof_regime_results.md` OOD 节。
 
 ---
 
