@@ -1,10 +1,24 @@
 # 实验 F·Fitzpatrick17k：冻结预训练 backbone regime（skin）
 
-> **一句话结论**：在 **HyperAdapt 论文的本尊数据集 Fitzpatrick17k** 上、用**论文自己的冻结 backbone
-> 设定**复刻实验 F。powered CV-OOF（池化 16012）下，冻结 HyperAdapt 的 worst-group AUC 对冻结 ERM
-> **+0.021 但不显著（p=0.334）**，AUC gap 反而**变宽**（0.053→0.083）；唯一稳健、极显著的增益仍是
-> **Overall AUC（+0.045, p=1e-24，容量效应）**。方向上比 HAM（负）更接近论文（dark-skin / Eopp 名义改善），
-> 但**统计上未确立公平赢**——论文的 Fitzpatrick 公平声明在我们的 powered 二分类-AUC 口径下**未获稳健复现**。
+> 🛑 **信号闸门口径更新（2026-07-19）**：闸门已由单-split 条件互信息改为 **OOF conditional V-information**
+> （Xu 2020 / Hewitt 2021；权威 = `docs/conditional_v_information_gate.md`）。关键变化：
+> **HAM-age 由「唯一正信号」退回「未检出」**（+0.0028 bits，CI 触 0）；Fitzpatrick ≈0；
+> **CheXpert / MIMIC 全轴 CI<0 = 决定性 0**；唯一 detected 为 **PAPILA-age**（+0.041 bits，但 n=420）。
+> control task 五库全部通过 ⇒ 零读数非假阴。本文「HAM-age `I(Y;age|X)>0`」一族表述**已过时**（下方已内联订正）；
+> 各处**结论方向不变**，但「有信号」前提须按新闸门重读。
+
+
+> **⚠️ 2026-07-19 口径修订**：本文档 CV-OOF 数字（结果 B、H2–H4）原用 **pooled**（跨折池化 raw logit +
+> DeLong），已整体改为 **averaging**（逐折算→折间平均 + 样本级 bootstrap）。**零重训**。改口径原因见
+> [[pooled-oof-calibration-drift-artifact]]。分析脚本 `scripts/analyze_frozen_regime_fitz_cvoof_averaging.py`。
+>
+> **一句话结论（averaging 口径，修订后）**：在 **HyperAdapt 论文的本尊数据集 Fitzpatrick17k** 上、用**论文
+> 自己的冻结 backbone 设定**复刻实验 F。powered CV-OOF averaging（N=16012）下，冻结 HyperAdapt 的 worst-group
+> AUC 对冻结 ERM **+0.046，p=0.078（临界，仍不显著）**，AUC gap 仍**微变宽**（0.057→0.064）；唯一稳健、
+> 极显著的增益仍是 **Overall AUC（+0.048，bootstrap CI 排除 0，容量效应）**。方向上比 HAM 更强（每一肤色型
+> 都升、含最深 VI 0.770→0.816），但 **worst-group AUC 未过显著门槛**——论文的 Fitzpatrick 公平声明在我们的
+> powered 二分类-AUC 口径下**未获稳健（显著）复现**。（相对旧 pooled 版：worst-group Δ +0.021→**+0.046**、
+> p 0.334→**0.078**，效应更大、更接近显著但未越线；总判决不变。）
 
 ---
 
@@ -29,7 +43,8 @@ F1/recall/Eopp 搭桥）。同数据集、同肤色轴，是可达到的最贴�
 - **执行**：F-search 70564/70565 → Pareto → F-confirm 70576/70577 → F-CV-OOF 70586/70587。
 - **Pareto 选定**：erm_frozen=idx5 `lr3e-04_wd1e-03`、hyperadapt_frozen=idx2 `lr1e-04_wd1e-04`。
 - 全微调参照（单-split 5-seed，无 cv5）：erm / hyperadapt 均 Pareto idx3 `lr1e-04_wd1e-03`。
-- 分析：`scripts/analyze_frozen_regime_fitz.py`（单-split）、`scripts/analyze_frozen_regime_fitz_cvoof.py`（CV-OOF）。
+- 分析：`scripts/analyze_frozen_regime_fitz.py`（单-split）、`scripts/analyze_frozen_regime_fitz_cvoof_averaging.py`
+  （**CV-OOF averaging，现口径**；旧 `analyze_frozen_regime_fitz_cvoof.py` 为 pooled，已弃用）。
 
 ---
 
@@ -47,49 +62,56 @@ F1/recall/Eopp 搭桥）。同数据集、同肤色轴，是可达到的最贴�
 
 ---
 
-## 4. 结果 B：CV-OOF 池化终判（N=16012，肤色 VI 评估 n≈635）
+## 4. 结果 B：CV-OOF averaging 终判（N=16012，肤色 VI 折均评估 n≈635/折均 ~127）
 
 | Arm | Overall | worst | gap | wTPR@.2 | Eopp | 逐肤色 AUC I→VI |
 |-----|---------|-------|-----|---------|------|-----------------|
-| **ERM 冻结**（论文 Vanilla） | 0.8163 | 0.7729 | 0.053 | 0.475 | 0.273 | .826/.817/.819/.789/.819/**.773** |
-| **HyperAdapt 冻结**（论文 Ours） | 0.8616 | 0.7941 | 0.083 | 0.574 | 0.214 | .863/.854/.862/.877/.870/**.794** |
+| **ERM 冻结**（论文 Vanilla） | 0.8171 | 0.7700 | 0.057 | 0.444 | 0.305 | .827/.818/.819/.792/.818/**.770** |
+| **HyperAdapt 冻结**（论文 Ours） | 0.8647 | 0.8156 | 0.064 | 0.534 | 0.317 | .870/.858/.870/.879/.875/**.816** |
 
-配对显著性（冻结 HA − 冻结 ERM，池化 OOF，3000×bootstrap / DeLong）：
+配对显著性（冻结 HA − 冻结 ERM，**averaging + 样本级 bootstrap，B=3000**；Overall 亦用 bootstrap CI，弃用池化 DeLong）：
 
 | 指标 | Δ | 判决 |
 |------|---|------|
-| worst-group AUC | **+0.0211** [−0.0335, +0.0855] p=0.334 | **✗ 不显著** |
-| Overall AUC (DeLong) | **+0.0453** p=1.4e-24 | ✓ 极显著 |
-| AUC gap | 0.053 → **0.083（变宽）** | HN 抬升所有肤色，浅肤色更多 |
-| wTPR@.2 / Eopp（点估计） | 0.475→0.574 / 0.273→0.214 | 名义改善（论文方向），但未做配对显著性 |
+| worst-group AUC | **+0.0456** [−0.0058, +0.1064] p=0.078 | **✗ 不显著（临界）** |
+| Overall AUC | **+0.0476** [+0.0391, +0.0561] p<0.001 | ✓ 极显著 |
+| AUC gap | 0.057 → **0.064（微变宽）** | HN 抬升所有肤色，浅肤色略多 |
+| wTPR@.2 / Eopp（点估计） | 0.444→0.534 / 0.305→**0.317** | wTPR 名义改善、**Eopp 反微升（更差）**——操作点信号混杂，未做配对显著性 |
+
+> **对比旧 pooled 版**：worst-group Δ **+0.021→+0.046**、p **0.334→0.078**（HN 跨折漂移被池化压低，averaging 修复后
+> 效应更大、逼近但未越显著线）；逐肤色 VI **.794→.816**；gap 变宽幅度缩小（.083→.064）。Overall 稳健不变。
+> **注意 Eopp 由旧版「改善 0.273→0.214」转为 averaging「微升 0.305→0.317」**——操作点指标受阈值/小格影响、
+> 池化阈值漂移曾夸大其「改善」，averaging 下 HN 的操作点公平信号并不稳健。
 
 ---
 
 ## 5. H1–H4 判决
 
-- **H2（worst-group AUC）——否（但方向为正）**：冻结 HA 对冻结 ERM **+0.021 不显著**（p=0.334）。
-  与 HAM（−0.041）不同，此处**符号为正**且逐肤色**每一型都改善**（含最深 VI 0.773→0.794），
-  但**未达统计显著**，且 **gap 变宽**（HN 抬浅肤色更多）——不构成稳健公平赢。
-- **H3（操作点）——名义正、未显著检验**：冻结 HA 的 wTPR（0.475→0.574）与 Eopp（0.273→0.214）
-  名义改善，方向与论文一致；但仅点估计，worst-group AUC（更严的排序公平）已判 n.s.。
-- **H4（Overall）——稳健正（容量）**：冻结 HA 对冻结 ERM **+0.045 p=1e-24**，极显著。冻结 ERM
-  linear-probe 欠拟合（0.816），HN 的 adapter 容量把**所有**肤色一起抬起——这是**准确率/容量**效应，非公平。
-- **H1（方差）**：powered 池化后对所有臂消解，次要。
+- **H2（worst-group AUC）——否（但方向为正、临界）**：冻结 HA 对冻结 ERM **+0.046，p=0.078 不显著**
+  （averaging；旧 pooled +0.021 p=0.334）。逐肤色**每一型都改善**（含最深 VI 0.770→0.816），符号为正且
+  比 HAM 更强，但**仍未过显著门槛**，且 **gap 微变宽**（HN 抬浅肤色略多）——不构成稳健公平赢。
+- **H3（操作点）——混杂、未解锁公平**：averaging 下冻结 HA 的 wTPR 名义改善（0.444→0.534）但 **Eopp 反微升
+  （0.305→0.317，更差）**——与旧 pooled 版「wTPR/Eopp 双改善」不同（池化阈值漂移曾夸大 Eopp 改善）。操作点
+  信号在 averaging 下**方向不一致**，未做配对显著性；与 worst-group AUC 的 n.s. 一致：冻结未在公平轴解锁显著优势。
+- **H4（Overall）——稳健正（容量）**：冻结 HA 对冻结 ERM **+0.048，bootstrap CI 排除 0**，极显著。冻结 ERM
+  linear-probe 欠拟合（0.817），HN 的 adapter 容量把**所有**肤色一起抬起——这是**准确率/容量**效应，非公平。
+- **H1（方差）**：powered 口径后对所有臂消解，次要。
 
 ---
 
 ## 6. 结论与和论文的对照
 
 1. **论文 Fitzpatrick 公平声明未获稳健复现**：论文报 HA dark-skin F1 +4.9%、Eopp1 −33%。我们在**同数据集、
-   同肤色轴、同冻结 regime**下，dark-skin（VI）AUC +0.021、Eopp −22%（相对）——**方向一致**，但
-   **worst-group AUC 增益不显著（p=0.334）**，且 AUC gap 变宽。论文的效应在点估计层面部分再现，
-   **但过不了 powered CV-OOF + 配对检验**。
-2. **与 HAM 的差异有信息量**：Fitz 冻结 HA worst-group 符号为正（HAM 为负）。可能因肤色比 age 更可从图像
-   解码 / 冻结 ERM linear-probe 更弱（0.816），留给 HN 容量的抬升空间更大——但抬升是**全肤色齐涨**（gap 变宽），
-   本质仍是 Overall/容量而非缩小组间差。
-3. **两数据集一致的硬结论**：**冻结 regime 下 HN 无稳健 worst-group 公平赢**（Fitz +0.021 n.s.、HAM −0.041 n.s.），
-   唯一稳健增益是 Overall AUC。这与 `I(Y;A|X)≈0`（skin 作业 67913）、R1、路线 A、HAM 实验 F 全线一致：
-   **HN 价值在 Overall（充分性），不在公平**。冻结预训练（论文卖点）不改变此结论。
+   同肤色轴、同冻结 regime**下，dark-skin（VI）AUC **+0.046**——**方向一致**，但 **worst-group AUC 增益不显著
+   （p=0.078，临界未越线）**，AUC gap 微变宽，且 Eopp 点估计不降反微升。论文的效应在点估计层面部分再现，
+   **但过不了 powered CV-OOF averaging + 配对检验**。
+2. **与 HAM 的差异（averaging 口径下缩小）**：averaging 下 Fitz（+0.046 n.s.）与 HAM（+0.048 marg n.s.）
+   worst-group 符号**双双为正、量级相近**——旧 pooled 版「Fitz 正 / HAM 负」的不一致**是池化伪影**，已消。
+   两数据集现一致为「正但不显著」。Fitz 抬升是**全肤色齐涨**（gap 变宽），本质仍是 Overall/容量而非缩小组间差。
+3. **两数据集一致的硬结论**：**冻结 regime 下 HN 无稳健（显著）worst-group 公平赢**（Fitz +0.046 p=0.078、
+   HAM +0.048 marg n.s.，均方向为正但 n.s.），唯一稳健增益是 Overall AUC。这与 `I(Y;A|X)≈0`（skin 作业 67913）、
+   R1、[[crossdataset-worstgroup-fairness]]（averaging）、HAM 实验 F 全线一致：**HN 价值在 Overall（充分性），
+   不在（显著）公平**。冻结预训练（论文卖点）不改变此结论。
 
 ---
 

@@ -1,5 +1,11 @@
 # 路线 A：HAM 5 折 CV-OOF —— worst-group 公平的有功效判决
 
+> 🛑 **信号闸门口径更新（2026-07-19）**：闸门已改为 **OOF conditional V-information**
+> （权威 = `docs/conditional_v_information_gate.md`）。**HAM-age 由「唯一正信号」退回「未检出」**（≈0）；
+> Fitzpatrick ≈0；**CheXpert / MIMIC 全轴 CI<0 = 决定性 0**；唯一 detected 为 **PAPILA-age**（n=420）。
+> 本文「唯一 `I(Y;age|X)>0`」等标注**已过时**；**性能结论与聚合口径不受影响**，但「有信号/无信号」的分类须按新闸门重读。
+
+
 > 建立日期：2026-07-09。对应「优化显著性检验能否用于公平（worst-group）」这一问的落地实验。
 > 权威结论并入 `docs/results_summary.md` D7-0；本文件是路线 A 的完整设计 + 数据 + 判决记录。
 > 数据由 `scripts/ham_cv_oof_significance.py` 从 `outputs/ham10000/cv5/predictions/` 统一重算。
@@ -158,7 +164,7 @@ n=27/n_pos=4/AUC=1.0 退化 → **n=193/n_pos=67/SE=0.029**；全 14 格 SE<0.10
    放大 5–10×、0/14 进地板），3 HN 的 worst-group 对 ERM 打平（点估计一律微负、CI 收窄仍跨 0），
    且**显著输给 attribute-blind 的 SWAD**（边缘口径 3/3 显著、canonical HyperHead 显著）。
    即先前「worst-group 未证实，疑似评估-n 受限」正式升级为 **「即使解除评估-n 限制，HN 仍不能把
-   `I(Y;age|X)>0` 转化为 worst-group 公平提升」**。**临床四联（D-A6）同向佐证且更刺眼**：固定
+   `I(Y;age|X)>0` 转化为 worst-group 公平提升」**（⚠️ 新 OOF V-info 闸门下 **HAM-age 已退回未检出**，见 `docs/conditional_v_information_gate.md`——前提本身不再成立，本节否定结论**方向不变、且更属预期**）。**临床四联（D-A6）同向佐证且更刺眼**：固定
    specificity=0.8 下，深层 HN 的 **worst-group sensitivity（最差子群恶性检出率）反而显著低于 ERM**
    （HyperHead 0.409 / HyperAdapt 0.398 vs ERM 0.613，漏诊率 39%→60%，sensitivity gap 近翻倍），
    SWAD（不用属性）最高——HN 的 Overall 增益是靠多数/易组换来的。
