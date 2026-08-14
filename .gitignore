@@ -40,3 +40,19 @@ build/
 # Keep tracked data subdirectories
 !data/splits/
 !data/metadata/
+
+# LaTeX 报告编译产物（源码在 report/ 内，产物统一落在 report/build/）
+report/build/
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.lof
+*.log
+*.lot
+*.out
+*.run.xml
+*.synctex.gz
+*.toc
