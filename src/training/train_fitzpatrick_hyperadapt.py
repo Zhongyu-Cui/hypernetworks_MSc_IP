@@ -51,6 +51,12 @@ def parse_args() -> argparse.Namespace:
                         help="随机种子；缺省取 fitzpatrick_baseline.yaml 的 training.seeds[0]")
     parser.add_argument("--batch_size", type=int, default=None,
                         help="覆盖 config 的 batch_size；HyperAdapt 逐样本卷积核显存大，协议要求等 batch 对照。")
+    parser.add_argument("--swad", action="store_true",
+                        help="开启 SWAD 权重平均派生（**实验 G**：HN×SWAD 融合，方案见 "
+                             "docs/hyperadapt_swad_fusion_plan.md）：逐 epoch 缓存 CPU 权重，训练末在 loss "
+                             "谷区间平均，额外产出 method=<本 method>_swad（如 hyperadapt_swad）的 "
+                             "checkpoint / val 日志 / test 预测，与本 run 同 config/seed。命名与 ERM 派生的 "
+                             "SWAD 基线（method=swad）隔离，互不覆盖。")
     parser.add_argument("--cv", type=int, default=0,
                         help="K 折 StratifiedKFold（实验 F CV-OOF 用 5）；0=用单次 80/10/10 划分（默认）。")
     parser.add_argument("--fold", type=int, default=None,
@@ -145,6 +151,7 @@ def main() -> None:
             freeze_backbone=args.freeze_backbone),
         unpack_fn=unpack_skin, forward_fn=forward_skin,
         fairness_report_fn=_fairness_report,
+        swad=args.swad,
     )
 
 

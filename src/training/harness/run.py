@@ -34,8 +34,31 @@ from src.training.harness.hparam_grid import HParamConfig
 # ============================================================
 # 常量：方法集、seed 规程、model selection 策略
 # ============================================================
-# 需要训练的方法（ERM + 3 HN）。SWAD/ROC 由 ERM 派生（不单独训练，故不在此列）。
-TRAINABLE_METHODS: tuple[str, ...] = ("erm", "hyperhead", "hyperfusion", "hyperadapt")
+# 需要训练的方法（ERM + GroupDRO + 3 HN）。SWAD/ROC 由 ERM 派生（不单独训练，故不在此列）。
+# `groupdro`（Sagawa et al. ICLR 2020）是**训练时使用子群标签**的基线，与 ERM 单变量差异仅在损失，
+# 补上「用属性但不条件化函数」这一对照格（见 harness/groupdro.py 模块文档）。
+TRAINABLE_METHODS: tuple[str, ...] = ("erm", "groupdro", "hyperhead", "hyperfusion", "hyperadapt")
+
+
+def swad_method_name(base_method: str) -> str:
+    """
+    某方法派生出的 SWAD 变体的 method 名（命名规约的**单一事实来源**，训练侧与分析侧共用）。
+
+    ERM 派生的 SWAD 是**协议 §1 的独立基线**，历史上就叫 `"swad"`，其 checkpoint / 预测 /
+    val 日志已大量落盘并被 A1/A2/D 各分析脚本按该名寻址，故保持不变。
+    非 ERM 方法（**实验 G**：HN×SWAD 融合，见 docs/hyperadapt_swad_fusion_plan.md）派生的 SWAD
+    必须换名为 `"<method>_swad"`——否则同一数据集下只要 HN 的选定超参与 ERM 的选定超参**恰好相同**，
+    run_id=(method, config_tag, seed) 就会完全撞车、静默覆写 ERM-SWAD 基线（HAM cv5 即为实例：
+    HyperAdapt 选定 `lr3e-05_wd1e-04`，而 ERM 搜索阶段带 SWAD 跑满 6 配置，
+    `swad_lr3e-05_wd1e-04` 已存在）。
+
+    Args:
+        base_method: 派生来源的方法名（如 "erm" / "hyperadapt" / "hyperadapt_frozen"）。
+
+    Returns:
+        SWAD 变体的 method 名："swad"（base 为 erm 时）或 f"{base_method}_swad"。
+    """
+    return "swad" if base_method == "erm" else f"{base_method}_swad"
 
 # seed 规程（比较协议 §3）
 SEEDS_SEARCH: tuple[int, ...] = (42,)                    # 超参搜索：每配置 1 seed
@@ -171,6 +194,22 @@ def _selftest() -> None:
                 rid = run_id(method, cfg.tag, seed)
                 assert parse_run_id(rid) == (method, cfg.tag, seed), rid
 
+    # 派生 SWAD 方法名（实验 G）：run_id 仍可逆，且与 ERM-SWAD 基线在**同 config_tag** 下不撞名。
+    # 回归意义：正则的 method 组非贪婪、config_tag 锚定 "lr"，故 "<method>_swad" 不会被误切；
+    # 同 tag 不撞名是硬要求——HAM cv5 下 HyperAdapt 选定 lr3e-05_wd1e-04，而 ERM 搜索带 SWAD 跑满
+    # 6 配置，swad_lr3e-05_wd1e-04 已存在，若命名不隔离会静默覆写基线。
+    assert swad_method_name("erm") == "swad"                     # 向后兼容：既有产物名不变
+    for base in ("hyperhead", "hyperfusion", "hyperadapt", "hyperadapt_frozen"):
+        derived = swad_method_name(base)
+        assert derived == f"{base}_swad", derived
+        for cfg in iter_hparam_grid():
+            for seed in SEEDS_CONFIRM:
+                rid = run_id(derived, cfg.tag, seed)
+                assert parse_run_id(rid) == (derived, cfg.tag, seed), rid
+                # 同 config_tag / 同 seed 下与 ERM-SWAD、与派生来源本身均不撞名
+                assert rid != run_id("swad", cfg.tag, seed)
+                assert rid != run_id(base, cfg.tag, seed)
+
     # 唯一性：method×config×seed 三元组两两不同名（消除覆盖）
     ids = {
         run_id(m, c.tag, s)
@@ -199,7 +238,8 @@ def _selftest() -> None:
     seed_everything(43); c = (random.random(), float(np.random.rand()), torch.rand(1).item())
     assert a == b and a != c
 
-    print("run self-test 全部通过 ✓（run_id round-trip + 唯一性 + 路径命名 + seed 规程 + 播种可复现）")
+    print("run self-test 全部通过 ✓（run_id round-trip + 派生 SWAD 名隔离 + 唯一性 + 路径命名 "
+          "+ seed 规程 + 播种可复现）")
 
 
 if __name__ == "__main__":

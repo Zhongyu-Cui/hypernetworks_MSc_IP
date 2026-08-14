@@ -40,7 +40,9 @@ from torch.utils.data import DataLoader
 
 from src.training.harness.hparam_grid import HParamConfig
 from src.training.harness.predictions import default_prediction_path, save_predictions, val_prediction_path
-from src.training.harness.run import checkpoint_path, run_id, seed_everything  # noqa: F401 (seed_everything re-export)
+from src.training.harness.run import (  # noqa: F401 (seed_everything / swad_method_name re-export)
+    checkpoint_path, run_id, seed_everything, swad_method_name,
+)
 from src.training.harness.subgroup_auc import subgroup_auc_vector, vector_worst_case
 from src.training.harness.swad import (
     DEFAULT_N_CONVERGE, DEFAULT_N_TOLERANCE, DEFAULT_TOLERANCE_RATIO,
@@ -58,6 +60,10 @@ Attrs = dict[str, torch.Tensor]
 UnpackFn = Callable[[Batch], tuple[torch.Tensor, torch.Tensor, Attrs]]
 ForwardFn = Callable[[nn.Module, torch.Tensor, Attrs], torch.Tensor]
 FairnessReportFn = Callable[[np.ndarray, np.ndarray, dict[str, np.ndarray]], None]
+# 可选的**训练目标**替换（默认 None = 普通 BCE 均值）。签名 (logits, labels, attrs) -> 标量 loss，
+# 使需要子群标签的目标（GroupDRO）能拿到 attrs。只作用于训练；val/test 恒用普通 BCE，保证早停、
+# SWAD loss 谷、跨方法 loss 可比性不被目标函数差异污染。
+ObjectiveFn = Callable[[torch.Tensor, torch.Tensor, Attrs], torch.Tensor]
 
 
 # ============================================================
@@ -147,8 +153,19 @@ def train_one_epoch(
     epoch: int,
     unpack_fn: UnpackFn,
     forward_fn: ForwardFn,
+    on_after_backward: Callable[[nn.Module], None] | None = None,
+    objective_fn: ObjectiveFn | None = None,
 ) -> tuple[float, float]:
-    """跑一个训练 epoch，返回 (平均 loss, accuracy %)。逻辑与各脚本原实现一致，仅经回调泛化。"""
+    """
+    跑一个训练 epoch，返回 (平均 loss, accuracy %)。逻辑与各脚本原实现一致，仅经回调泛化。
+
+    on_after_backward：可选探针，在 `loss.backward()` 之后、**梯度裁剪之前**逐 batch 调用一次
+    （故看到的是**未裁剪的真实梯度**，供 E1③ 累积 conv adapter 梯度范数）。默认 None = 无开销。
+
+    objective_fn：可选训练目标替换（如 GroupDRO 的 robust loss）。给定时用
+    `objective_fn(logits, labels, attrs)` 取代 `criterion(logits, labels)`——注意此时返回的
+    「平均 loss」是该目标的值（GroupDRO 下为 Σ q_g L_g），与 val loss（恒为普通 BCE）**不同尺度**。
+    """
     model.train()
     total_loss = 0.0
     correct = 0
@@ -161,8 +178,12 @@ def train_one_epoch(
 
         optimizer.zero_grad()
         logits = forward_fn(model, images, attrs)         # [B, 1]
-        loss = criterion(logits, label_col)
+        # objective_fn 给定时用它替换普通 BCE（GroupDRO 需要 attrs 取组序号）
+        loss = (criterion(logits, label_col) if objective_fn is None
+                else objective_fn(logits, label_col, attrs))
         loss.backward()
+        if on_after_backward is not None:                 # 裁剪前捕获真实梯度（探针）
+            on_after_backward(model)
         nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip_norm)
         optimizer.step()
 
@@ -262,6 +283,7 @@ def evaluate_checkpoint(
 def _finalize_swad(
     *,
     model: nn.Module,
+    method: str,
     val_losses: list[float],
     state_dicts: list[dict[str, torch.Tensor]],
     output_dir: Path,
@@ -281,16 +303,23 @@ def _finalize_swad(
 ) -> dict:
     """
     A3.2：把逐 epoch 收集的 (val_loss, state_dict) 做 SWAD loss-valley 权重平均，落盘并在
-    val/test 评估。SWAD 是 ERM 的**派生**基线（method="swad"，同 config/seed），产出单一平均模型。
+    val/test 评估。SWAD 是**派生**产物（同 config/seed，单一平均模型），派生自 ERM 时即协议 §1
+    的 SWAD 基线，派生自 HN 时即实验 G 的融合臂。
 
-    命名：checkpoint 与 val 日志以 run_id("swad", config_tag, seed) 为基名，与 ERM 区分开，
-    供 A1/A2 / D 阶段按 method="swad" 寻址。写一条 val 记录（epoch = 平均区间末 epoch 的 1-based 值）
+    命名：checkpoint / 预测 / val 日志均以 run_id(swad_method_name(method), config_tag, seed) 为
+    基名——ERM 派生仍为 `"swad"`（向后兼容既有产物），HN 派生为 `"<method>_swad"`（见
+    `swad_method_name` 的撞车说明）。写一条 val 记录（epoch = 平均区间末 epoch 的 1-based 值）
     承载平均模型的验证集完整子群向量。
 
+    Args:
+        method: 派生来源的方法名（用于推导 SWAD 变体名；不是 SWAD 自身的 method 名）。
+
     Returns:
-        {swad_ckpt, swad_val_log, swad_interval:(t_s,t_e,n_averaged), swad_val_overall_auc, swad_val_wc_auc}。
+        {swad_method, swad_ckpt, swad_val_log, swad_pred, swad_interval:(t_s,t_e,n_averaged),
+         swad_val_overall_auc, swad_val_wc_auc}。
     """
-    print(f"\n{'#' * 70}\n# SWAD 权重平均（派生自 ERM，method=swad）\n{'#' * 70}")
+    swad_method = swad_method_name(method)
+    print(f"\n{'#' * 70}\n# SWAD 权重平均（派生自 {method}，method={swad_method}）\n{'#' * 70}")
     averaged_sd, interval = swad_average_over_interval(
         val_losses, state_dicts,
         n_converge=n_converge, n_tolerance=n_tolerance, tolerance_ratio=tolerance_ratio,
@@ -299,7 +328,7 @@ def _finalize_swad(
     print(f"loss valley 区间: epoch {interval.t_s + 1}..{interval.t_e + 1} "
           f"(共 {interval.n_averaged} 个，L_min={interval.l_min:.4f}, thr={interval.threshold:.4f})")
 
-    swad_rid = run_id("swad", config_tag, seed)
+    swad_rid = run_id(swad_method, config_tag, seed)
     swad_ckpt = output_dir / f"{swad_rid}_averaged.pth"
     torch.save(averaged_sd, swad_ckpt)
     print(f"已保存 SWAD 平均权重: {swad_ckpt.name}")
@@ -308,11 +337,11 @@ def _finalize_swad(
     model.load_state_dict(averaged_sd)
     # --- 验证集：写一条 val 记录（承载平均模型的子群向量）---
     er_val = evaluate(model, val_loader, criterion, dataset, unpack_fn, forward_fn)
-    swad_log = default_val_log_path(output_dir, "swad", config_tag, seed)
+    swad_log = default_val_log_path(output_dir, swad_method, config_tag, seed)
     if swad_log.exists():
         swad_log.unlink()
     rec = record_from_vector(
-        er_val.vector, dataset=dataset, method="swad", config_tag=config_tag,
+        er_val.vector, dataset=dataset, method=swad_method, config_tag=config_tag,
         lr=cfg["training"].get("learning_rate", 0.0), wd=cfg["training"].get("weight_decay", 0.0),
         seed=seed, epoch=interval.t_e + 1, overall_auc=er_val.overall_auc,
     )
@@ -320,7 +349,7 @@ def _finalize_swad(
     wc_str = f"{er_val.wc_auc:.4f}" if er_val.wc_auc is not None else "N/A"
     print(f"SWAD val: AUC={er_val.overall_auc:.4f} worst-case AUC={wc_str}")
 
-    # --- 测试集：完整指标 + 分组公平性报告 + 落盘逐样本预测（method="swad"）---
+    # --- 测试集：完整指标 + 分组公平性报告 + 落盘逐样本预测（method=swad_method）---
     er_test = evaluate(model, test_loader, criterion, dataset, unpack_fn, forward_fn)
     wc_test = f"{er_test.wc_auc:.4f}" if er_test.wc_auc is not None else "N/A"
     print(f"\n{'#' * 70}\n# Evaluating SWAD averaged model (test)\n{'#' * 70}")
@@ -328,11 +357,12 @@ def _finalize_swad(
           f"Worst-case AUC={wc_test}")
     fairness_report_fn(er_test.labels, er_test.logits, er_test.attrs)
     # SWAD 是单一平均模型（无 overall/worstcase 之分）：预测存到 "overall" 槽（唯一 selection）
-    swad_pred = default_prediction_path(output_dir, "swad", config_tag, seed, "overall")
+    swad_pred = default_prediction_path(output_dir, swad_method, config_tag, seed, "overall")
     save_predictions(swad_pred, er_test.labels, er_test.logits, er_test.attrs)
     print(f"已落盘 SWAD test 预测: {swad_pred.name}")
 
     return {
+        "swad_method": swad_method,
         "swad_ckpt": str(swad_ckpt),
         "swad_val_log": str(swad_log),
         "swad_pred": str(swad_pred),
@@ -364,6 +394,9 @@ def run_training(
     swad_n_converge: int = DEFAULT_N_CONVERGE,
     swad_n_tolerance: int = DEFAULT_N_TOLERANCE,
     swad_tolerance_ratio: float = DEFAULT_TOLERANCE_RATIO,
+    on_after_backward: Callable[[nn.Module], None] | None = None,
+    epoch_diag_fn: Callable[[int, "EvalResult"], None] | None = None,
+    objective: ObjectiveFn | None = None,
 ) -> dict:
     """
     统一训练编排：AdamW(lr,wd 来自 hparam) + BCEWithLogitsLoss + grad_clip，逐 epoch 评估、
@@ -390,9 +423,17 @@ def run_training(
         build_model: 无参工厂，返回未搬到 device 的模型（本函数负责 .to(DEVICE)）。
         unpack_fn / forward_fn / fairness_report_fn: 见模块 docstring。
         swad: 是否额外派生 SWAD 权重平均模型（比较协议 A3.2）。为 True 时逐 epoch 缓存 CPU 权重，
-            训练后做 loss-valley 平均并在 val/test 评估。**仅对 ERM 有意义**（协议：SWAD 套在 ERM 上、
-            不与 HN 组合），method != "erm" 时会打印警告但仍执行。默认 False（HN / 搜索阶段不开销）。
+            训练后做 loss-valley 平均并在 val/test 评估。派生模型的 method 名由
+            `swad_method_name(method)` 决定：ERM → "swad"（协议 §1 基线），HN → "<method>_swad"
+            （**实验 G** 的 HN×SWAD 融合臂，见 docs/hyperadapt_swad_fusion_plan.md）。
+            默认 False（搜索阶段不开销）。
         swad_n_converge / swad_n_tolerance / swad_tolerance_ratio: SWAD 超参（见 harness/swad.py）。
+        objective: 可选的**训练目标**替换（默认 None = 普通 BCE 均值）。用于 **GroupDRO**
+            （`harness.groupdro.GroupDROObjective`）这类需要子群标签的目标：训练时用
+            `objective(logits, labels, attrs)` 代替 criterion，而 **val/test 评估、早停、SWAD
+            loss 谷仍一律用普通 BCE**——保证模型选择口径与其它方法完全一致（协议决策①）。
+            若对象提供 `reset_epoch_stats()` / `epoch_summary()` / `describe()`，harness 会在
+            每个 epoch 前后调用以打印诊断（如各组损失与对抗权重 q），无则静默跳过。
 
     Returns:
         summary dict：{best_val_overall_auc, best_val_wc_auc, best_overall_epoch,
@@ -439,6 +480,13 @@ def run_training(
     criterion = nn.BCEWithLogitsLoss()
     optimizer = optim.AdamW(trainable_params, lr=hparam.lr, weight_decay=hparam.wd)
 
+    # 训练目标替换（GroupDRO 等）：只影响训练 loss，val/test 仍用上面的 criterion
+    if objective is not None:
+        print(f"Objective: 训练目标已替换为 {type(objective).__name__}"
+              f"（val/test 评估与早停仍用普通 BCE）")
+        if hasattr(objective, "describe"):
+            print(objective.describe())
+
     best_val_auc = -np.inf
     best_val_wc_auc = -np.inf
     best_overall_epoch = 0
@@ -450,19 +498,26 @@ def run_training(
 
     # SWAD（A3.2）：逐 epoch 缓存 (val_loss, CPU state_dict) 供训练后 loss-valley 权重平均
     if swad and method != "erm":
-        print(f"⚠️  swad=True 但 method={method!r}（非 erm）：SWAD 协议上仅套在 ERM 上，仍照常执行。")
+        print(f"ℹ️  swad=True 且 method={method!r}（非 erm）：这是**实验 G**（HN×SWAD 融合）的路径，"
+              f"派生模型将记为 method={swad_method_name(method)!r}，与协议 §1 的 ERM-SWAD 基线"
+              f"（method='swad'）分开存放，互不覆盖。")
     swad_val_losses: list[float] = []
     swad_state_dicts: list[dict[str, torch.Tensor]] = []
 
     print(f"\nTraining for up to {max_epochs} epochs (early stopping enabled)...\n" + "=" * 70)
     for epoch in range(1, max_epochs + 1):
         t0 = time.time()
+        if objective is not None and hasattr(objective, "reset_epoch_stats"):
+            objective.reset_epoch_stats()
         train_loss, train_acc = train_one_epoch(
             model, train_loader, criterion, optimizer,
             train_cfg["grad_clip_norm"], epoch, unpack_fn, forward_fn,
+            on_after_backward=on_after_backward, objective_fn=objective,
         )
         er = evaluate(model, val_loader, criterion, dataset, unpack_fn, forward_fn)
         dt = time.time() - t0
+        if objective is not None and hasattr(objective, "epoch_summary"):
+            print(f"  {objective.epoch_summary()}")
 
         # 逐 epoch 写完整子群 AUC 向量到 val 日志（复用 evaluate 已算的 vector，不二次计算）
         rec = record_from_vector(
@@ -470,6 +525,11 @@ def run_training(
             lr=hparam.lr, wd=hparam.wd, seed=seed, epoch=epoch, overall_auc=er.overall_auc,
         )
         append_val_record(log_path, rec)
+
+        # 可选逐 epoch 诊断探针（如 E1③ 的 conv ρ / 梯度范数 / 权重范数）：调用方自行落盘，
+        # harness 保持通用（不改 val 日志 schema）。放在 checkpoint/早停判定之前，确保每 epoch 都记。
+        if epoch_diag_fn is not None:
+            epoch_diag_fn(epoch, er)
 
         # SWAD：缓存本 epoch 的 val loss 与 CPU 权重快照（放 CPU 避免占 GPU 显存）
         if swad:
@@ -546,7 +606,7 @@ def run_training(
     # --- SWAD 派生（A3.2）：loss-valley 权重平均 + val/test 评估 ---
     if swad:
         summary.update(_finalize_swad(
-            model=model, val_losses=swad_val_losses, state_dicts=swad_state_dicts,
+            model=model, method=method, val_losses=swad_val_losses, state_dicts=swad_state_dicts,
             output_dir=output_dir, config_tag=hparam.tag, seed=seed, dataset=dataset, cfg=cfg,
             criterion=criterion, val_loader=val_loader, test_loader=test_loader,
             unpack_fn=unpack_fn, forward_fn=forward_fn, fairness_report_fn=fairness_report_fn,
@@ -555,3 +615,178 @@ def run_training(
         ))
 
     return summary
+
+
+# ============================================================
+# self-test：SWAD 派生的命名隔离与落盘链路（合成数据、秒级，无需 GPU/真实数据集）
+# ============================================================
+def _make_synthetic_loader(
+    n: int, batch_size: int, *, shuffle: bool, seed: int, noise: float, img: int,
+) -> DataLoader:
+    """
+    造一批 schema 对齐 HAM10000 loader 的合成样本：(image, label, sex, age_group)。
+
+    标签由图像信号 + 噪声决定，保证各子群 AUC 有定义（否则 subgroup_auc 返回 NaN、worst-case 为空）。
+
+    Args:
+        n         : 样本数。
+        batch_size: 批大小。
+        shuffle   : 是否打乱（train=True）。
+        seed      : 该 split 的随机种子（train/val/test 须互不相同）。
+        noise     : 标签噪声强度（越大越易过拟合 ⇒ val loss 先降后升，形成 loss 谷）。
+        img       : 图像边长。
+
+    Returns:
+        DataLoader，逐 batch 产出 4 元组。
+    """
+    from torch.utils.data import TensorDataset
+
+    g = np.random.default_rng(seed)
+    sex = g.integers(0, 2, size=n)
+    age = g.integers(0, 4, size=n)                     # HAM 的 4 个有效年龄组
+    signal = g.normal(size=n)
+    label = (signal + noise * g.normal(size=n) > 0).astype(np.int64)
+    images = (signal[:, None, None, None] * np.ones((1, 1, img, img))
+              + 0.5 * g.normal(size=(n, 1, img, img))).astype(np.float32)
+    ds = TensorDataset(torch.from_numpy(images), torch.from_numpy(label),
+                       torch.from_numpy(sex), torch.from_numpy(age))
+    return DataLoader(ds, batch_size=batch_size, shuffle=shuffle)
+
+
+class _SyntheticNet(nn.Module):
+    """自测用极小模型：图像头 + 可选 age 条件偏置（复刻 HN 的 `forward(image, age)` 签名）。"""
+
+    def __init__(self, conditioned: bool, img: int, hidden: int = 0) -> None:
+        """
+        Args:
+            conditioned: True = 吃 age（模拟 HN）；False = image-only（模拟 ERM）。
+            img        : 图像边长。
+            hidden     : >0 时改用该宽度的 3 层 MLP（高容量，用于制造过拟合与 loss 谷）。
+        """
+        super().__init__()
+        self.fc = (nn.Linear(img * img, 1) if hidden == 0 else
+                   nn.Sequential(nn.Linear(img * img, hidden), nn.ReLU(),
+                                 nn.Linear(hidden, hidden), nn.ReLU(), nn.Linear(hidden, 1)))
+        self.age_bias = nn.Embedding(4, 1) if conditioned else None
+        if self.age_bias is not None:
+            nn.init.zeros_(self.age_bias.weight)
+
+    def forward(self, image: torch.Tensor, age: torch.Tensor | None = None) -> torch.Tensor:
+        """Args: image [B,1,H,W]；age [B]（conditioned 时必给）。Returns: [B,1] logits。"""
+        out = self.fc(image.flatten(1))
+        if self.age_bias is not None and age is not None:
+            out = out + self.age_bias(age.long())
+        return out
+
+
+def _selftest() -> None:
+    """
+    验证 `run_training(swad=True)` 的派生命名与落盘链路（实验 G 的关键回归测试）。
+
+    断言三件事：
+      1. HN（method="hyperadapt"）的派生产物全部落在 `hyperadapt_swad_*` 命名空间；
+      2. **不产生任何 `swad_*` 文件**，且与 ERM 派生的 SWAD 在**同 config_tag 同 seed** 下互不覆盖
+         —— 这正是 HAM cv5 的真实撞车场景（HyperAdapt 选定 lr3e-05_wd1e-04，而 ERM 搜索带 SWAD
+         跑满 6 配置、`swad_lr3e-05_wd1e-04` 已存在）；
+      3. ERM 派生仍为 `swad_*`（向后兼容未破坏），且 val 日志内 `method` 字段与文件名一致
+         （下游 A1/A2 按该字段筛选，仅文件名对不够）。
+
+    另含一个**过拟合用例**：前两个用例 val loss 单调下降 ⇒ 谷底=末 epoch、区间退化为单点，
+    「平均多个 epoch 快照」这条路径不会被走到；故用小样本 + 高容量 + 强标签噪声制造真实 loss 谷，
+    断言 n_averaged>1 且平均权重 ≠ 端点权重。
+    """
+    import json
+    import shutil
+    import tempfile
+
+    from src.training.harness.hparam_grid import get_hparam_config
+
+    img, seed = 8, 42
+    out = Path(tempfile.mkdtemp(prefix="train_loop_selftest_"))
+
+    def run(method: str, conditioned: bool, *, config_index: int = 0, num_epochs: int = 5,
+            n_train: int = 256, hidden: int = 0, noise: float = 0.3,
+            out_dir: Path | None = None, swad: bool = True,
+            objective: "ObjectiveFn | None" = None) -> dict:
+        """跑一次训练（默认 swad=True）；config_index=0 → lr3e-05_wd1e-04（真实撞车 tag）。"""
+        cfg = {
+            "training": {"batch_size": 64, "num_epochs": num_epochs, "grad_clip_norm": 1.0,
+                         "learning_rate": 3e-5, "weight_decay": 1e-4},
+            # patience=num_epochs：关早停，确保跑满、谷后回升能被观察到
+            "early_stopping": {"monitor": "val_auc", "mode": "max",
+                               "patience": num_epochs, "min_delta": 0.0},
+        }
+        seed_everything(seed)                          # 规程：建 loader 前播种
+        mk = lambda n, sh, sd: _make_synthetic_loader(  # noqa: E731
+            n, 64, shuffle=sh, seed=sd, noise=noise, img=img)
+        return run_training(
+            dataset="ham10000", method=method, output_dir=(out_dir or out), cfg=cfg,
+            hparam=get_hparam_config(config_index), seed=seed,
+            train_loader=mk(n_train, True, 1), val_loader=mk(128, False, 2),
+            test_loader=mk(128, False, 3),
+            build_model=lambda: _SyntheticNet(conditioned, img, hidden),
+            unpack_fn=unpack_sex_age,
+            forward_fn=forward_age if conditioned else forward_image_only,
+            fairness_report_fn=lambda y, s, a: None,   # 公平性报告非本测试目标
+            swad=swad, objective=objective,
+        )
+
+    try:
+        tag = get_hparam_config(0).tag
+        s_hn = run("hyperadapt", True)
+        s_erm = run("erm", False)                      # 同 tag 同 seed = 撞车场景
+
+        assert s_hn["swad_method"] == "hyperadapt_swad", s_hn["swad_method"]
+        assert s_erm["swad_method"] == "swad", s_erm["swad_method"]
+        for rel in (f"hyperadapt_swad_{tag}_seed{seed}_averaged.pth",
+                    f"val_logs/hyperadapt_swad_{tag}_seed{seed}.jsonl",
+                    f"predictions/hyperadapt_swad_{tag}_seed{seed}_overall.npz"):
+            assert (out / rel).exists(), f"缺 HN 派生产物：{rel}"
+        for rel in (f"swad_{tag}_seed{seed}_averaged.pth",
+                    f"val_logs/swad_{tag}_seed{seed}.jsonl",
+                    f"predictions/swad_{tag}_seed{seed}_overall.npz"):
+            assert (out / rel).exists(), f"缺 ERM-SWAD 产物：{rel}"
+        names = [p.name for p in out.rglob("*") if p.is_file()]
+        assert len([n for n in names if n.startswith("hyperadapt_swad_")]) == 3
+        assert len([n for n in names if n.startswith(f"swad_{tag}")]) == 3   # 未被 HN 覆盖
+        rec = json.loads((out / f"val_logs/hyperadapt_swad_{tag}_seed{seed}.jsonl")
+                         .read_text().strip())
+        assert rec["method"] == "hyperadapt_swad", rec["method"]
+
+        # 过拟合用例：把谷区间撑开到 >1，覆盖多-epoch 平均路径
+        out2 = out / "valley"
+        s_of = run("hyperadapt", True, config_index=5, num_epochs=25,
+                   n_train=64, hidden=256, noise=1.2, out_dir=out2)
+        _, _, n_avg = s_of["swad_interval"]
+        assert n_avg > 1, f"未制造出宽度>1 的谷区间（n_averaged={n_avg}），多-epoch 平均未覆盖"
+        tag5 = get_hparam_config(5).tag
+        avg_sd = torch.load(out2 / f"hyperadapt_swad_{tag5}_seed{seed}_averaged.pth",
+                            map_location="cpu", weights_only=True)
+        best_sd = torch.load(out2 / f"hyperadapt_{tag5}_seed{seed}_best_overall.pth",
+                             map_location="cpu", weights_only=True)
+        assert any(not torch.allclose(avg_sd[k], best_sd[k])
+                   for k in avg_sd if torch.is_floating_point(avg_sd[k])), \
+            "平均权重与 best_overall 逐张量相同 ⇒ 平均未生效"
+
+        # GroupDRO 目标接线：训练走 robust loss、评估仍普通 BCE，产物命名与 ERM 隔离，q 被真实更新
+        from src.training.harness.groupdro import GroupDROObjective
+        out3 = out / "groupdro"
+        gdro = GroupDROObjective("ham10000", step_size=1.0)   # η 放大以在 5 epoch 内看出偏移
+        s_gd = run("groupdro", False, out_dir=out3, swad=False, objective=gdro)
+        tag0 = get_hparam_config(0).tag
+        assert (out3 / f"groupdro_{tag0}_seed{seed}_best_overall.pth").exists()
+        assert (out3 / f"predictions/groupdro_{tag0}_seed{seed}_overall.npz").exists()
+        assert "swad_method" not in s_gd, "GroupDRO 不派生 SWAD"
+        q = gdro.q.detach().cpu().numpy()
+        assert abs(q.max() - 1.0 / gdro.n_groups) > 1e-4, f"q 未被更新（仍均匀）：{q}"
+        assert abs(q.sum() - 1.0) < 1e-6, q.sum()
+
+        print(f"\ntrain_loop self-test 全部通过 ✓（HN→hyperadapt_swad_* / ERM→swad_*，"
+              f"同 tag 同 seed 无覆盖，val 日志 method 字段一致，"
+              f"多-epoch 谷平均生效 n_averaged={n_avg}，GroupDRO 目标接线 q 已更新）")
+    finally:
+        shutil.rmtree(out, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    _selftest()

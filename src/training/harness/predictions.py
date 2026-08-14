@@ -73,6 +73,7 @@ def save_predictions(
     y_true: np.ndarray,
     y_score: np.ndarray,
     attrs: dict[str, np.ndarray],
+    extra: dict[str, np.ndarray] | None = None,
 ) -> None:
     """
     把单 run 的 test 预测存为 .npz（不存在则建目录）。
@@ -81,7 +82,13 @@ def save_predictions(
         path   : 目标 .npz（通常来自 default_prediction_path）。
         y_true : [N] 0/1 真实标签。
         y_score: [N] 模型 logits（原始输出，见模块 docstring）。
-        attrs  : {属性名 -> [N] 数组}（sex/race/age/skin 的子集）。
+        attrs  : {属性名 -> [N] 数组}（sex/race/age/skin 的子集）。**仅放会被 splat 进
+                 subgroup_auc_vector / fairness 模块的分组属性**。
+        extra  : 可选的**逐样本附加列**（{名 -> [N] 数组}），存为 `extra_<名>`，**不进 attrs**、
+                 不会被 splat 成 fairness kwargs。用途：cluster bootstrap 需要的聚类键
+                 （CXR `patient_id` / HAM `lesion_id`）——条件化范围消融 plan §3.3 要求
+                 「患者/病灶级配对 cluster bootstrap」，而 patient_id 不是分组属性，
+                 混进 attrs 会让 subgroup_auc_vector 收到非法 kwarg。
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -92,7 +99,31 @@ def save_predictions(
     }
     for k, v in attrs.items():
         payload[f"attr_{k}"] = np.asarray(v)
+    if extra:
+        payload["extra_keys"] = np.array(list(extra.keys()), dtype=object)
+        for k, v in extra.items():
+            payload[f"extra_{k}"] = np.asarray(v)
     np.savez(path, **payload)
+
+
+def load_extra(path: Path | str) -> dict[str, np.ndarray]:
+    """
+    读回 save_predictions 的 `extra` 附加列（无则返回空字典）。
+
+    与 load_predictions 分开是为**向后兼容**：既有 .npz 无 `extra_keys` 键，load_predictions
+    的 3 元组签名保持不变，既有消费方（cv_oof_report / significance / roc）零改动。
+
+    Args:
+        path: .npz 路径。
+
+    Returns:
+        {名 -> [N] 数组}；文件不含 extra 时为 {}。
+    """
+    with np.load(path, allow_pickle=True) as data:
+        if "extra_keys" not in data:
+            return {}
+        keys = [str(k) for k in data["extra_keys"]]
+        return {k: data[f"extra_{k}"] for k in keys}
 
 
 def load_predictions(
@@ -158,7 +189,19 @@ def _selftest() -> None:
         except ValueError:
             pass
 
-    print("predictions self-test 全部通过 ✓（round-trip 多/单属性 + 路径命名 + 目录自建 + selection 校验）")
+        # --- extra 附加列（cluster bootstrap 的 patient_id / lesion_id）---
+        assert load_extra(p) == {}, "未写 extra 的文件应返回空字典（向后兼容）"
+        pid = rng.integers(0, 100, n)
+        p3 = default_prediction_path(td, "erm", "lr1e-04_wd1e-04", 42, "overall")
+        save_predictions(p3, y, score, attrs, extra={"patient_id": pid})
+        # extra 不污染 attrs（否则会被 splat 成 subgroup_auc_vector 的非法 kwarg）
+        _, _, a4 = load_predictions(p3)
+        assert set(a4.keys()) == set(attrs.keys()), f"extra 不应混入 attrs，实得 {sorted(a4)}"
+        ex = load_extra(p3)
+        assert set(ex.keys()) == {"patient_id"} and np.array_equal(ex["patient_id"], pid)
+
+    print("predictions self-test 全部通过 ✓（round-trip 多/单属性 + 路径命名 + 目录自建 + "
+          "selection 校验 + extra 附加列与向后兼容）")
 
 
 if __name__ == "__main__":

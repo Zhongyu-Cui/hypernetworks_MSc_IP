@@ -50,6 +50,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=None,
                         help="随机种子；缺省取 ham10000_baseline.yaml 的 training.seeds[0]")
     parser.add_argument("--batch_size", type=int, default=None, help="覆盖 config 的 batch_size（通常无需）。")
+    parser.add_argument("--swad", action="store_true",
+                        help="开启 SWAD 权重平均派生（**实验 G**：HN×SWAD 融合，方案见 "
+                             "docs/hyperadapt_swad_fusion_plan.md）：额外产出 method=hyperhead_swad 的 "
+                             "checkpoint / val 日志 / test 预测，与本 run 同 config/seed，"
+                             "与 ERM 派生的 SWAD 基线（method=swad）隔离。")
     parser.add_argument("--cv", type=int, default=0,
                         help="K 折 lesion 级 GroupKFold（路线 A 用 5）；0=用单次 80/10/10 划分（默认）。")
     parser.add_argument("--fold", type=int, default=None,
@@ -158,6 +163,7 @@ def main() -> None:
         build_model=lambda: ResNet18HyperHeadAge(num_classes=1, num_age=NUM_AGE),
         unpack_fn=unpack_sex_age, forward_fn=forward_age,
         fairness_report_fn=_fairness_report,
+        swad=args.swad,
     )
 
 

@@ -52,7 +52,28 @@ def parse_args() -> argparse.Namespace:
                         help="随机种子；缺省取 mimic_cxr_baseline.yaml 的 training.seeds[0]")
     parser.add_argument("--batch_size", type=int, default=None,
                         help="覆盖 config 的 batch_size；HyperAdapt 逐样本卷积核显存大，协议要求等 batch 对照。")
+    parser.add_argument("--swad", action="store_true",
+                        help="开启 SWAD 权重平均派生（**实验 G**：HN×SWAD 融合，方案见 "
+                             "docs/hyperadapt_swad_fusion_plan.md）：逐 epoch 缓存 CPU 权重，训练末在 loss "
+                             "谷区间平均，额外产出 method=hyperadapt_swad 的 checkpoint / val 日志 / "
+                             "test 预测，与本 run 同 config/seed，且与 ERM 派生的 SWAD 基线"
+                             "（method=swad）命名隔离、互不覆盖。")
+    parser.add_argument("--cv", type=int, default=0,
+                        help="K 折患者级 GroupKFold（CV-OOF 用 5）；0=用 master 自带单-split（默认）。")
+    parser.add_argument("--fold", type=int, default=None,
+                        help="--cv>0 时指定折号 k ∈ [0,K)。")
     return parser.parse_args()
+
+
+def resolve_paths(cfg: dict, cv: int, fold: int | None) -> tuple[Path, Path]:
+    """按 --cv/--fold 解析 (split_dir, output_dir)；CV 时重定向到 cv{K}/fold{k} 与 OUTPUT_DIR/cv{K}，
+    与单-split 结果隔离，绝不覆盖。"""
+    base = REPO_ROOT / cfg["data"]["split_dir"]
+    if cv and cv >= 2:
+        if fold is None or not (0 <= fold < cv):
+            raise ValueError(f"--cv={cv} 需配合合法 --fold ∈ [0,{cv})")
+        return base / f"cv{cv}" / f"fold{fold}", OUTPUT_DIR / f"cv{cv}"
+    return base, OUTPUT_DIR
 
 
 def build_transforms(cfg: dict) -> tuple[transforms.Compose, transforms.Compose]:
@@ -76,10 +97,9 @@ def build_transforms(cfg: dict) -> tuple[transforms.Compose, transforms.Compose]
 
 
 def get_dataloaders(
-    cfg: dict, train_transform: transforms.Compose, eval_transform: transforms.Compose,
+    cfg: dict, split_dir: Path, train_transform: transforms.Compose, eval_transform: transforms.Compose,
 ) -> tuple[DataLoader, DataLoader, DataLoader]:
     """构建 train / val / test DataLoader（split 已患者级划分；val/test 保持真实分布，HN 不重采样）。"""
-    split_dir = REPO_ROOT / cfg["data"]["split_dir"]
     image_size = cfg["data"]["image_size"]
     batch_size = cfg["training"]["batch_size"]
     num_workers = cfg["dataloader"]["num_workers"]
@@ -118,17 +138,21 @@ def main() -> None:
     seed = args.seed if args.seed is not None else cfg["training"]["seeds"][0]
     hparam = get_hparam_config(args.config_index)
 
+    split_dir, output_dir = resolve_paths(cfg, args.cv, args.fold)
+
     seed_everything(seed)
-    print("Loading MIMIC-CXR (No Finding, sex/race/age-conditioned HyperAdapt)...")
+    print(f"Loading MIMIC-CXR (No Finding, sex/race/age-conditioned HyperAdapt)  "
+          f"split_dir={split_dir.name}  output_dir={output_dir.name}...")
     train_transform, eval_transform = build_transforms(cfg)
-    train_loader, val_loader, test_loader = get_dataloaders(cfg, train_transform, eval_transform)
+    train_loader, val_loader, test_loader = get_dataloaders(cfg, split_dir, train_transform, eval_transform)
 
     run_training(
-        dataset=DATASET, method=METHOD, output_dir=OUTPUT_DIR, cfg=cfg, hparam=hparam, seed=seed,
+        dataset=DATASET, method=METHOD, output_dir=output_dir, cfg=cfg, hparam=hparam, seed=seed,
         train_loader=train_loader, val_loader=val_loader, test_loader=test_loader,
         build_model=lambda: ResNet18HyperAdapt(num_classes=1, pretrained=cfg["model"]["pretrained"]),
         unpack_fn=unpack_sex_race_age, forward_fn=forward_sex_race_age,
         fairness_report_fn=_fairness_report,
+        swad=args.swad,
     )
 
 
