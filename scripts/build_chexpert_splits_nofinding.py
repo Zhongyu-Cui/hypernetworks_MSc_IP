@@ -50,13 +50,16 @@ CheXpert 预处理（MEDFAIR 对齐版）：生成 No Finding 二分类任务的
   每行字段：image_path（绝对路径）, label, sex, race, age, view, patient_id
 """
 
+import argparse
 import json
 import zipfile
 from pathlib import Path
 
 import pandas as pd
+from sklearn.model_selection import GroupKFold, GroupShuffleSplit
 
 RANDOM_STATE = 42
+CV_VAL_FRAC = 0.10   # CV 每折 val 目标占总体比例（对齐 HAM/Fitz CV：val≈10%，train≈其余）
 
 BASE_PATH = Path("/vol/biodata/projects/chai/data")
 CSV_PATH = BASE_PATH / "cxr" / "cxr7-1m_master.csv"
@@ -348,8 +351,76 @@ def oversample_train_split(train_df: pd.DataFrame, output_dir: Path) -> None:
     )
 
 
+def _write_cv_fold(splits: dict, fold_dir: Path) -> None:
+    """把某折的 {train,val,test} DataFrame（已去 split 列语义）写出为 CSV（丢弃 split 列）。"""
+    fold_dir.mkdir(parents=True, exist_ok=True)
+    for name, subset in splits.items():
+        subset.drop(columns=["split"], errors="ignore").reset_index(drop=True).to_csv(
+            fold_dir / f"{name}.csv", index=False)
+    n = {k: len(v) for k, v in splits.items()}
+    print(f"  {fold_dir.name}: train {n['train']:,} / val {n['val']:,} / test {n['test']:,}  "
+          f"（test 正例率 {splits['test']['label'].mean():.1%}）")
+
+
+def build_cv_folds(out: pd.DataFrame, n_folds: int) -> None:
+    """
+    患者级 GroupKFold 交叉验证划分（CV-OOF 口径铺开）：把全数据集按 patient_id 分 K 折，每折 1 折作
+    test（≈1/K），其余 K-1 折为 train+val，再用 GroupShuffleSplit 从中按患者切出 val（占总体≈10%）。
+
+    动机（`docs/oof_selection_rollout_plan.md`）：单-split CheXpert test（12,198）的少数子群（如
+    Non-White×age 交叉）评估 n 有限；5 折 disjoint test 池化成全 ~138,644 OOF 后，少数子群评估 n
+    放大约 K 倍，把 worst-group 从评估-n 噪声地板抬起。同一 patient_id 整组只进一折的 test/val/train
+    （GroupKFold + GroupShuffleSplit 均按 patient_id 分组），杜绝同患者多片跨 split 泄漏。
+
+    ⚠️ 与单-split 完全隔离：CV 折写入 cv{K}/ 子目录；训练时 output_dir 亦重定向到
+    outputs/chexpert_cxr/cv{K}/，不覆盖已冻结的单-split 结果。忽略 master 自带 Split 列，按 patient_id
+    重新分折（CV 需全数据集重划，built-in split 只是其中一种划法）。
+
+    Args:
+        out: 完整输出 DataFrame（需含 'patient_id'，全 ~138,644 行）。
+        n_folds: 折数（本方案用 5）。
+
+    输出:
+        data/splits/chexpert_nofinding/cv{K}/fold{k}/{train,val,test}.csv
+    """
+    gkf = GroupKFold(n_splits=n_folds)
+    groups = out["patient_id"].values
+    cv_root = OUTPUT_DIR / f"cv{n_folds}"
+    # val 目标占总体≈CV_VAL_FRAC：trainval=(K-1)/K，故 val 占 trainval 比例 = CV_VAL_FRAC / ((K-1)/K)
+    val_frac_within = CV_VAL_FRAC / (1.0 - 1.0 / n_folds)
+    print(f"\n患者级 {n_folds} 折 GroupKFold -> {cv_root}"
+          f"（每折 test≈{100 / n_folds:.0f}%，val≈{CV_VAL_FRAC:.0%}，train≈其余）")
+    for k, (trainval_idx, test_idx) in enumerate(gkf.split(out, groups=groups)):
+        trainval = out.iloc[trainval_idx].reset_index(drop=True)
+        test = out.iloc[test_idx].reset_index(drop=True)
+        gss_val = GroupShuffleSplit(n_splits=1, test_size=val_frac_within, random_state=RANDOM_STATE)
+        tr_idx, va_idx = next(gss_val.split(trainval, groups=trainval["patient_id"].values))
+        splits = {
+            "train": trainval.iloc[tr_idx].reset_index(drop=True),
+            "val": trainval.iloc[va_idx].reset_index(drop=True),
+            "test": test,
+        }
+        # 折内患者无跨 train/val/test 泄漏
+        tr_p, va_p, te_p = (set(splits[s]["patient_id"]) for s in ("train", "val", "test"))
+        assert not (tr_p & va_p) and not (tr_p & te_p) and not (va_p & te_p), f"fold{k} 患者跨 split 泄漏"
+        _write_cv_fold(splits, cv_root / f"fold{k}")
+    # 交叉校验：K 折 test 并集恰覆盖全部（disjoint 且完整），OOF 池化正确性前提
+    test_sizes = [len(pd.read_csv(cv_root / f"fold{k}" / "test.csv")) for k in range(n_folds)]
+    assert sum(test_sizes) == len(out), (
+        f"{n_folds} 折 test 并集应=全数据集 {len(out)}，实得 {sum(test_sizes)}（{test_sizes}）")
+    print(f"OOF 完整性校验通过：{n_folds} 折 test 并集 = {sum(test_sizes)} = 全数据集 {len(out)}")
+
+
 def main() -> None:
-    """主函数：依次执行筛选、标签处理、属性编码、划分写出（过采样按开关）。"""
+    """主函数：依次执行筛选、标签处理、属性编码、划分写出（过采样、CV 折按开关）。"""
+    parser = argparse.ArgumentParser(description="构建 CheXpert No Finding 二分类 split")
+    parser.add_argument(
+        "--cv", type=int, default=0,
+        help="K 折患者级 GroupKFold（CV-OOF 用 5）；0=只用 master 自带单-split（默认）。"
+             "二者可叠加：>0 时同时生成单-split 与 cv{K}/ 折划分（互不覆盖）。",
+    )
+    args = parser.parse_args()
+
     df = load_chexpert_frontal(CSV_PATH)
     df = apply_report_labels(df, LABEL_SECTION)
     df = encode_attributes_medfair(df)
@@ -359,6 +430,10 @@ def main() -> None:
 
     print(f"\n按 master CSV 自带 Split 列拆分并写出至：{OUTPUT_DIR}")
     write_splits(split_df, OUTPUT_DIR)
+
+    # 可选：K 折患者级 GroupKFold CV（CV-OOF 口径铺开；与单-split 隔离写 cv{K}/）
+    if args.cv and args.cv >= 2:
+        build_cv_folds(split_df, args.cv)
 
     if WRITE_OVERSAMPLED:
         train_df = split_df[split_df["split"] == "train"].drop(columns=["split"]).reset_index(drop=True)
