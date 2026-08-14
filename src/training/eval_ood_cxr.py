@@ -54,9 +54,15 @@ DATASET_CONFIG: dict[str, Path] = {
 METHOD_REGISTRY: dict[str, tuple[Callable[[], nn.Module], Callable]] = {
     "erm": (lambda: ResNet18Pretrained(num_classes=1), forward_image_only),
     "swad": (lambda: ResNet18Pretrained(num_classes=1), forward_image_only),  # SWAD=ERM 权重平均
+    # GroupDRO：训练时用子群标签重加权损失，**架构与 ERM 完全相同**（属性只进损失、不进 forward）
+    # ⇒ 推理侧是纯 image-only，与 ERM/SWAD 同一注册形态。
+    "groupdro": (lambda: ResNet18Pretrained(num_classes=1), forward_image_only),
     "hyperhead": (lambda: ResNet18HyperHead(num_classes=1), forward_sex_race_age),
     "hyperfusion": (lambda: ResNet18HyperFusion(num_classes=1, pretrained=False), forward_sex_race_age),
     "hyperadapt": (lambda: ResNet18HyperAdapt(num_classes=1, pretrained=False), forward_sex_race_age),
+    # 实验 G 的融合臂：架构与 hyperadapt 完全相同，只是权重来自 SWAD loss-valley 平均
+    # （checkpoint 后缀 _averaged，见 run_ood_cxr_full_target.checkpoint_path）。
+    "hyperadapt_swad": (lambda: ResNet18HyperAdapt(num_classes=1, pretrained=False), forward_sex_race_age),
 }
 
 
@@ -79,7 +85,10 @@ def build_eval_transform(cfg: dict) -> transforms.Compose:
     ])
 
 
-def build_target_test_loader(dataset: str, batch_size: int = 128, num_workers: int = 4) -> DataLoader:
+def build_target_test_loader(
+    dataset: str, batch_size: int = 128, num_workers: int = 4,
+    *, cv: int = 0, fold: int | None = None,
+) -> DataLoader:
     """
     构建目标数据集 B 的 test DataLoader（复用 MIMICCXRDataset；两 CXR 数据集 schema 相同）。
 
@@ -87,6 +96,9 @@ def build_target_test_loader(dataset: str, batch_size: int = 128, num_workers: i
         dataset    : 目标数据集名（"mimic" / "chexpert"）。
         batch_size : 推理 batch。
         num_workers: DataLoader worker 数。
+        cv / fold  : CV-OOF OOD 用——给定 cv>=2 与 fold∈[0,cv) 时读 `cv{cv}/fold{fold}/test.csv`
+                     （目标该折 test），供 source 逐折 checkpoint → target 逐折 test 池化成 target OOF。
+                     缺省（cv=0）读单-split `test.csv`（与旧单-split OOD 兼容）。
 
     Returns:
         目标 test 集的 DataLoader（不打乱）。
@@ -95,8 +107,14 @@ def build_target_test_loader(dataset: str, batch_size: int = 128, num_workers: i
     split_dir = REPO_ROOT / cfg["data"]["split_dir"]
     image_size = cfg["data"]["image_size"]
     age_threshold = cfg["attributes"]["age"]["age_threshold"]
+    if cv and cv >= 2:
+        if fold is None or not (0 <= fold < cv):
+            raise ValueError(f"cv={cv} 需配合合法 fold ∈ [0,{cv})")
+        test_csv = split_dir / f"cv{cv}" / f"fold{fold}" / "test.csv"
+    else:
+        test_csv = split_dir / "test.csv"
     test_set = MIMICCXRDataset(
-        split_dir / "test.csv", transform=build_eval_transform(cfg),
+        test_csv, transform=build_eval_transform(cfg),
         image_size=image_size, age_threshold=age_threshold,
     )
     return DataLoader(test_set, batch_size=batch_size, shuffle=False,
@@ -124,6 +142,7 @@ def evaluate_ood(
     *,
     test_loader: DataLoader | None = None,
     report: bool = True,
+    forward_override: Callable | None = None,
 ) -> OODResult:
     """
     A5.1：加载源 A 训练的模型，在目标 B 的测试集上评估并报告公平性。
@@ -137,6 +156,9 @@ def evaluate_ood(
         target         : 目标数据集名（决定 test loader）。
         test_loader    : 可选，直接注入目标 test loader（缺省则按 target 构建；测试/复用时用）。
         report         : 是否打印分组公平性报告。
+        forward_override: 可选，替换该方法默认的 forward 回调。用于**属性 knockout 反事实**
+            （`run_ood_attr_knockout.py`）——只改「模型看到什么属性」，而 `evaluate` 收集的
+            分组键仍来自 unpack_fn 的真实属性，故评估口径不受污染。缺省 None = 原行为。
 
     Returns:
         OODResult。
@@ -147,6 +169,8 @@ def evaluate_ood(
     if method not in METHOD_REGISTRY:
         raise ValueError(f"未知 method {method!r}，可用：{sorted(METHOD_REGISTRY)}。")
     build_model, forward_fn = METHOD_REGISTRY[method]
+    if forward_override is not None:
+        forward_fn = forward_override      # knockout：只改模型输入，不改分组键
 
     model = build_model().to(DEVICE)
     state = torch.load(checkpoint_path, map_location=DEVICE, weights_only=True)

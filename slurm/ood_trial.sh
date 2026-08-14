@@ -1,0 +1,68 @@
+#!/bin/bash
+# ============================================================
+# OOD v2 · 阶段 1：独立 trial 训练（打破 seed ≡ fold）
+# ============================================================
+# 预注册：docs/ood_experiment_v2_preregistration.md §2（因子）、§7（阶段 1）。
+#
+# 现行 CV 布局把 seed 与 fold 绑死（seed = 42 + fold），使**训练随机性**与**数据划分**的方差
+# 无法分离。实测同 config/seed/fold 重跑的逐折 |ΔAUC| 可达 0.003，而待检验的效应仅 0.0018–0.0019
+# ⇒ 必须补独立 trial 才能判定 H2（效应是否在训练噪声之上）。
+#
+# **seed 编码（零破坏性）**：`seed = 42 + fold + 10 × trial`
+#   trial 0 → seed 42–46（**已存在，本脚本不重跑**）
+#   trial 1 → seed 52–56
+#   trial 2 → seed 62–66
+# run_id = <method>_<config_tag>_seed<seed> 因此天然唯一，**不改 harness/run.py、不覆盖既有产物**。
+#
+# array 0–9 → (fold, trial) 解码：
+#   FOLD  = task % 5          （5 折患者级 GroupKFold，cv5/fold{0..4} 已就位）
+#   TRIAL = task / 5 + 1      （1 或 2）
+#   SEED  = 42 + FOLD + 10 × TRIAL
+#
+# 由 --export 注入（与 trial 0 的原始提交参数**必须逐项一致**，否则等-batch/方法条件被破坏）：
+#   PY_SCRIPT    : 训练脚本绝对路径
+#   CONFIG_INDEX : S1 选中 config 的网格序号（见 harness/hparam_grid.py）
+#   BATCH        : 可选；HyperAdapt 必须传 128（等-batch，见项目记忆：batch 不等会制造伪影）
+#   SWAD         : 可选；=1 时加 --swad（仅 ERM 用，逐折派生 SWAD——两数据集 SWAD 的选中 config
+#                  与 ERM 相同，故 ERM 带 --swad 即同时补齐 SWAD）
+#
+# 示例（MIMIC ERM + SWAD，选中 config=lr1e-04_wd1e-04 → index 2）：
+#   sbatch --partition=gpus24 --job-name=oodv2_mimic_erm \
+#          --output=/vol/biomedic2/bglocker_studproj/zc125/logs/oodv2_mimic_erm.%N.%A_%a.log \
+#          --export=ALL,PY_SCRIPT=.../train_mimic_resnet18.py,CONFIG_INDEX=2,SWAD=1 \
+#          slurm/ood_trial.sh
+#SBATCH --gres=gpu:1
+#SBATCH --time=0-12:00:00
+# semois GPU 反复 device-handle 故障，永久排除（C 阶段纪律）
+#SBATCH --exclude=semois
+#SBATCH --array=0-9
+
+source /vol/biomedic2/bglocker_studproj/zc125/software/miniconda3/bin/activate /vol/biomedic2/bglocker_studproj/zc125/envs/medimg
+export PYTHONPATH=/vol/biomedic2/bglocker_studproj/zc125/code/hypernetworks_MSc_IP
+export PYTHONUNBUFFERED=1
+
+if [[ -z "$PY_SCRIPT" || -z "$CONFIG_INDEX" ]]; then
+    echo "ERROR: 必须经 --export 传入 PY_SCRIPT 与 CONFIG_INDEX" >&2
+    exit 1
+fi
+
+CV=5
+FOLD=$((SLURM_ARRAY_TASK_ID % 5))
+TRIAL=$((SLURM_ARRAY_TASK_ID / 5 + 1))     # 只跑 trial 1/2；trial 0 = 既有产物
+SEED=$((42 + FOLD + 10 * TRIAL))
+
+# 硬断言：trial 0 的 seed 区间（42–46）绝不可被本脚本触及，否则会覆盖既有产物
+if (( SEED < 52 )); then
+    echo "ERROR: SEED=$SEED 落入 trial 0 区间（42-46），会覆盖既有产物，拒绝执行" >&2
+    exit 1
+fi
+
+echo "OOD_V2_TRIAL  PY_SCRIPT=$PY_SCRIPT  config_index=$CONFIG_INDEX  fold=$FOLD  trial=$TRIAL  seed=$SEED  cv=$CV  BATCH=${BATCH:-config}  SWAD=${SWAD:-0}"
+
+python "$PY_SCRIPT" \
+    --config_index "$CONFIG_INDEX" \
+    --seed "$SEED" \
+    --cv "$CV" \
+    --fold "$FOLD" \
+    ${BATCH:+--batch_size "$BATCH"} \
+    ${SWAD:+--swad}
