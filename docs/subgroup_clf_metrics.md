@@ -1,5 +1,13 @@
 # 逐敏感组分类四联指标 + 跨方法排名（操作点：固定整体 FPR=0.2）
 
+> 🛑 **已作废（2026-09-05）**：本文档由 `scripts/build_subgroup_clf_metrics.py` 生成，该脚本已在
+> 仓库清理中删除，**表格无法再复现**。口径也已过时——它用的是 **pooled 5-seed 单-split**
+> （主口径早已改为 CV-OOF averaging），且包含 **ROC 与 PAPILA** 两个报告全文已删除的对象。
+> 阈值类的逐子群读数请改看 [between_group_gaps_and_accuracy.md](between_group_gaps_and_accuracy.md)
+> （averaging 口径、阈值在验证集上逐折选、含 accuracy 与 balanced accuracy）。
+> 本文件仅作历史记录保留。
+
+
 > 零重训，在 D3/D5 同款落盘预测上重算。**Sensitivity/Specificity/PPV/NPV** 逐边缘敏感组；worst/gap 门限 min_class_n=10。ROC 走 R2.3 操作点重选 θ 的调整概率。此操作点下各方法整体 FPR=0.2（整体特异度=0.8），跨方法差异纯来自指标在子群间的分布。
 
 

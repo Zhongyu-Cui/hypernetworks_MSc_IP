@@ -156,6 +156,20 @@ python scripts/cv_oof_report.py --dataset ham10000 --section all # 单库的逐�
 > 评估口径是 **averaging**（逐折算指标再平均），不是跨折池化原始分数——后者会因逐折
 > 校准漂移制造假阳性。
 
+**5. 组间差异与阈值上的逐组 accuracy**（次要终点，零重训）
+
+```bash
+# 一次性前置：SWAD 系臂当年只落了 test 预测，val 预测要从平均权重补推理（需 GPU）
+sbatch --job-name=swadval_ham --output=logs/swadval_ham.%N.%A_%a.log \
+       --export=ALL,DATASET=ham10000 slurm/dump_swad_val.sh
+
+python scripts/build_group_levels_averaging.py                   # 逐组水平 + gap + 逐组 accuracy
+python scripts/build_group_tables.py                             # 出 docs/ 的表与备用 LaTeX
+```
+
+> 阈值**逐折在该折验证集上选**（组无关的单一全局阈值，主口径 Youden J），施加到该折所有子群，
+> 指标折间平均——阈值从不接触评估数据，也不跨折池化。
+
 ## 框架 2：跨数据集迁移
 
 MIMIC ↔ CheXpert 双向。每折三个种子共 15 个模型，每个模型评**整个**目标数据集，
@@ -280,7 +294,7 @@ python scripts/plot_report_ch5_figures.py                       # 写入 report/
 ```
 outputs/
 ├── <数据集>/cv5/                 检查点、val 日志、predictions/、selected_configs.json
-├── conditioning_ablation/        框架 3 的四个 cell 与主口径结果 JSON
+├── conditioning_ablation/        框架 3 的四个 cell、主口径结果 JSON、逐组水平/gap/accuracy JSON
 ├── ood_cxr/{m2c,c2m}/            跨库预测与方差分解
 └── analysis/                     ρ、Holm 判决、超平面与轨迹产物
 ```

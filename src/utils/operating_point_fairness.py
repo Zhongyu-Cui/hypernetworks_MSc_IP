@@ -14,6 +14,11 @@
   - `equalized_odds_gap`    —— Equalized Odds gap = max(TPR 组间极差, FPR 组间极差)。
   - `worst_group_tpr`       —— 给定阈值下的最小子群 TPR。
   - `threshold_at_overall_fpr` —— 选使**整体 FPR ≈ 目标**（如 0.2）的单一全局阈值（类别不均衡稳健）。
+  - `threshold_youden`      —— 由 Youden J = TPR−FPR 最大化选单一全局阈值（患病率稳健，
+                               作为逐组 accuracy 的主口径操作点；见下「accuracy 为何要配 balanced」）。
+  - `weighted_counts` / `rates_from_counts` —— 混淆矩阵的**加权**四计数与由其导出的六个率，
+                               是本模块所有阈值指标的单一定义来源；权重用于 cluster bootstrap
+                               （重抽样在权重上进行，指标本身仍是同一套公式）。
   - `operating_point_report`   —— 一站式：在①原生决策阈值(prob=0.5，ROC 锚点) 与
                                   ②固定整体 FPR=0.2 两个操作点上，给 EqOdds gap / worst-group TPR。
 
@@ -26,8 +31,13 @@
 边缘组上，且边缘组样本量足够；数据集的 joint 小格（HAM sex×age ~26 眼）在**阈值**度量下会退化成
 0/1 噪声，故不进 headline（全子群明细仍可选返回，供透明核查）。
 
-**cross-validation**：self-test 用 sklearn（`confusion_matrix` / `recall_score` / `roc_curve`）
-独立复算 TPR/FPR 与固定-FPR 阈值，逐一断言与本模块一致（R2.1 完成判据）。
+**accuracy 为何总要配 balanced accuracy**：低患病率下 raw accuracy 由多数类主导——CheXpert
+患病率 8.2%，全判负即得 91.8% 的 accuracy，逐子群报它几乎只是在报各组的负样本占比。故
+`SubgroupClfMetrics` 同时给 `accuracy` 与 `balanced_accuracy`（=(sensitivity+specificity)/2），
+两者必须成对读。
+
+**cross-validation**：self-test 用 sklearn（`confusion_matrix` / `recall_score` / `roc_curve` /
+`accuracy_score` / `balanced_accuracy_score`）独立复算，逐一断言与本模块一致（R2.1 完成判据）。
 """
 
 from __future__ import annotations
@@ -157,41 +167,109 @@ def equalized_odds_gap(
 
 
 # ============================================================
-# 逐子群混淆矩阵四联指标：sensitivity / specificity / PPV / NPV
+# 逐子群混淆矩阵派生指标：sensitivity / specificity / PPV / NPV / accuracy / balanced accuracy
 # （评审补强扩展；在已落盘预测上零重训重算，供子群分类度量表 + 排名消费）
 # ============================================================
-# 四指标 → (SubgroupClfMetrics 属性名, 用于纳入门限的计数属性名)。
+# 六个指标 → 用于纳入门限的计数属性名。
 #   sensitivity=TPR=TP/(TP+FN)，需 ≥min_class_n 个**正样本**；
 #   specificity=TNR=TN/(TN+FP)=1-FPR，需 ≥min_class_n 个**负样本**；
 #   PPV=precision=TP/(TP+FP)，需 ≥min_class_n 个**预测为正**；
-#   NPV=TN/(TN+FN)，需 ≥min_class_n 个**预测为负**。
+#   NPV=TN/(TN+FN)，需 ≥min_class_n 个**预测为负**；
+#   accuracy=(TP+TN)/n，需 ≥min_class_n 个**样本**；
+#   balanced_accuracy=(sensitivity+specificity)/2，需**两个类各** ≥min_class_n（故记在
+#     派生计数 n_min_class=min(n_pos,n_neg) 上）——它由两个率平均而来，任一类退化都会污染它。
 # 门限计数保证 gap/worst 不被 n 极小子群的 0/1 退化率污染（与 equalized_odds_gap 同思路）。
 CLF_METRIC_COUNT: "OrderedDict[str, str]" = OrderedDict([
     ("sensitivity", "n_pos"),
     ("specificity", "n_neg"),
     ("ppv", "n_pred_pos"),
     ("npv", "n_pred_neg"),
+    ("accuracy", "n"),
+    ("balanced_accuracy", "n_min_class"),
 ])
+# 六个率的名字（`rates_from_counts` 的键；顺序即报表列序）
+CLF_METRICS: tuple[str, ...] = tuple(CLF_METRIC_COUNT)
 
 
 @dataclass(frozen=True)
 class SubgroupClfMetrics:
-    """单子群在某阈值下的混淆矩阵四联指标；任一指标缺对应样本时为 None。"""
+    """单子群在某阈值下的混淆矩阵派生指标；任一指标缺对应样本时为 None。"""
 
-    sensitivity: float | None  # TPR = TP/(TP+FN)
-    specificity: float | None  # TNR = TN/(TN+FP)
-    ppv: float | None          # TP/(TP+FP)
-    npv: float | None          # TN/(TN+FN)
+    sensitivity: float | None        # TPR = TP/(TP+FN)
+    specificity: float | None        # TNR = TN/(TN+FP)
+    ppv: float | None                # TP/(TP+FP)
+    npv: float | None                # TN/(TN+FN)
+    accuracy: float | None           # (TP+TN)/n —— 低患病率下由多数类主导，须与下一项成对读
+    balanced_accuracy: float | None  # (sensitivity+specificity)/2
     n: int
     n_pos: int
     n_neg: int
     n_pred_pos: int
     n_pred_neg: int
 
+    @property
+    def n_min_class(self) -> int:
+        """两类中较小的样本数——balanced accuracy 的纳入门限计数（见 CLF_METRIC_COUNT）。"""
+        return min(self.n_pos, self.n_neg)
+
+
+def weighted_counts(
+    y_true: np.ndarray, y_pred: np.ndarray, weight: np.ndarray | None = None,
+) -> tuple[float, float, float, float]:
+    """
+    混淆矩阵的**加权**四计数 (tp, fn, tn, fp)。
+
+    权重存在的意义是 cluster bootstrap：重抽样表达为每个样本被抽中的次数（可为 0 或 >1），
+    指标公式本身不变。`weight=None` 等价于全 1，此时返回值即普通整数计数（以 float 表示）。
+
+    Args:
+        y_true: [n] 0/1 真实标签。
+        y_pred: [n] 0/1 预测（已按阈值判定）。
+        weight: [n] 非负权重；None = 全 1。
+
+    Returns:
+        (tp, fn, tn, fp) 四个加权计数。
+    """
+    y_true = np.asarray(y_true).astype(int)
+    y_pred = np.asarray(y_pred).astype(int)
+    w = np.ones(len(y_true), dtype=float) if weight is None else np.asarray(weight, dtype=float)
+    pos, pred_pos = y_true == 1, y_pred == 1
+    return (float(w[pos & pred_pos].sum()), float(w[pos & ~pred_pos].sum()),
+            float(w[~pos & ~pred_pos].sum()), float(w[~pos & pred_pos].sum()))
+
+
+def rates_from_counts(
+    tp: float, fn: float, tn: float, fp: float,
+) -> "OrderedDict[str, float | None]":
+    """
+    由混淆矩阵四计数导出六个率——本模块所有阈值指标的**单一定义来源**。
+
+    Args:
+        tp/fn/tn/fp: 混淆矩阵四计数（可为加权的浮点数）。
+
+    Returns:
+        OrderedDict[指标名 -> 值]，键序同 CLF_METRICS；分母为 0 的指标为 None
+        （如无正样本 → sensitivity 与 balanced_accuracy 均 None）。
+    """
+    n_pos, n_neg = tp + fn, tn + fp
+    n_pred_pos, n_pred_neg = tp + fp, tn + fn
+    n = n_pos + n_neg
+    sens = (tp / n_pos) if n_pos > 0 else None
+    spec = (tn / n_neg) if n_neg > 0 else None
+    return OrderedDict([
+        ("sensitivity", sens),
+        ("specificity", spec),
+        ("ppv", (tp / n_pred_pos) if n_pred_pos > 0 else None),
+        ("npv", (tn / n_pred_neg) if n_pred_neg > 0 else None),
+        ("accuracy", ((tp + tn) / n) if n > 0 else None),
+        ("balanced_accuracy", ((sens + spec) / 2.0) if (sens is not None and spec is not None)
+         else None),
+    ])
+
 
 def _clf_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> SubgroupClfMetrics:
     """
-    从组内 (真值, 阈值判定后预测) 算 sensitivity/specificity/PPV/NPV 及各计数。
+    从组内 (真值, 阈值判定后预测) 算六个率及各计数（不加权路径）。
 
     Args:
         y_true: [n] 0/1 真实标签（组内）。
@@ -200,21 +278,12 @@ def _clf_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> SubgroupClfMetrics:
     Returns:
         SubgroupClfMetrics；分母为 0 的指标置 None（如无正样本 → sensitivity None）。
     """
-    y_true = np.asarray(y_true).astype(int)
-    y_pred = np.asarray(y_pred).astype(int)
-    tp = int(((y_true == 1) & (y_pred == 1)).sum())
-    fn = int(((y_true == 1) & (y_pred == 0)).sum())
-    tn = int(((y_true == 0) & (y_pred == 0)).sum())
-    fp = int(((y_true == 0) & (y_pred == 1)).sum())
-    n_pos, n_neg = tp + fn, tn + fp
-    n_pred_pos, n_pred_neg = tp + fp, tn + fn
+    tp, fn, tn, fp = weighted_counts(y_true, y_pred)
+    rates = rates_from_counts(tp, fn, tn, fp)
     return SubgroupClfMetrics(
-        sensitivity=(tp / n_pos) if n_pos > 0 else None,
-        specificity=(tn / n_neg) if n_neg > 0 else None,
-        ppv=(tp / n_pred_pos) if n_pred_pos > 0 else None,
-        npv=(tn / n_pred_neg) if n_pred_neg > 0 else None,
-        n=int(len(y_true)), n_pos=n_pos, n_neg=n_neg,
-        n_pred_pos=n_pred_pos, n_pred_neg=n_pred_neg,
+        **rates,
+        n=int(tp + fn + tn + fp), n_pos=int(tp + fn), n_neg=int(tn + fp),
+        n_pred_pos=int(tp + fp), n_pred_neg=int(tn + fn),
     )
 
 
@@ -355,6 +424,39 @@ def threshold_at_overall_fpr(
     t = thr[idx]
     if not np.isfinite(t):
         t = float(prob.max()) + 1.0  # 全判负（FPR=0）
+    return float(t)
+
+
+def threshold_youden(y_true: np.ndarray, prob: np.ndarray) -> float:
+    """
+    选使 **Youden J = TPR − FPR 最大**的单一全局阈值（Youden 1950）。
+
+    这是逐组 accuracy 的**主口径操作点**。相比「最大化整体 accuracy」的阈值，J 不随患病率
+    塌向多数类——CheXpert 患病率 8.2%，最大化 accuracy 的阈值会退化成近乎全判负；也相比固定
+    FPR=0.2 少一个需要辩护的自由参数。阈值本身是**组无关**的（在全体上选一个，施加到所有组），
+    这正是「先定一个跨全体的阈值，再看各组表现」所要求的。
+
+    Args:
+        y_true: [N] 0/1 标签。
+        prob  : [N] 概率。
+
+    Returns:
+        全局阈值 t；判正 y_pred = (prob >= t)。
+
+    Raises:
+        ValueError: y_true 只有一个类（ROC 无定义）。
+    """
+    y_true = np.asarray(y_true).astype(int)
+    prob = np.asarray(prob, dtype=float)
+    if (y_true == 1).sum() == 0 or (y_true == 0).sum() == 0:
+        raise ValueError("y_true 只有一个类，Youden J 无定义。")
+    fpr, tpr, thr = roc_curve(y_true, prob)
+    idx = int(np.argmax(tpr - fpr))
+    t = thr[idx]
+    # roc_curve 的 thr[0] 为 +inf（全判负）；J 在该点为 0，正常不会被 argmax 选中，
+    # 但样本退化时仍可能命中，退回一个有限阈值以免下游得到全判负的平凡分类器
+    if not np.isfinite(t):
+        t = float(prob.max()) + 1.0
     return float(t)
 
 
@@ -524,6 +626,47 @@ def _selftest() -> None:
                  if v.sensitivity is not None and v.n_pos >= 10]
     assert abs(worst_group_clf(clf, "sensitivity") - min(sens_vals)) < 1e-12
     assert abs(clf_gap(clf, "sensitivity") - (max(sens_vals) - min(sens_vals))) < 1e-12
+
+    # --- 4c) accuracy / balanced_accuracy 与 sklearn 交叉验证 ---
+    from sklearn.metrics import accuracy_score, balanced_accuracy_score
+    for gkey, gmask in (("age:<60", age == 0), ("sex:Female", sex == 1)):
+        yg = y[gmask]; pg = (prob[gmask] >= 0.5).astype(int)
+        m = clf[gkey]
+        assert abs(m.accuracy - accuracy_score(yg, pg)) < 1e-12
+        assert abs(m.balanced_accuracy - balanced_accuracy_score(yg, pg)) < 1e-12
+        # balanced accuracy 的门限计数是两类中较小者
+        assert m.n_min_class == min(int((yg == 1).sum()), int((yg == 0).sum()))
+    # accuracy 也能进 worst/gap 通道（门限记在 n 上）
+    acc_vals = [v.accuracy for v in clf.values() if v.accuracy is not None and v.n >= 10]
+    assert abs(worst_group_clf(clf, "accuracy") - min(acc_vals)) < 1e-12
+
+    # --- 4d) 加权路径：权重=全1 时与不加权逐位一致；整数权重 == 按次复制样本 ---
+    ypred_all = (prob >= 0.5).astype(int)
+    c_plain = weighted_counts(y, ypred_all)
+    c_ones = weighted_counts(y, ypred_all, np.ones(len(y)))
+    assert c_plain == c_ones
+    w = rng.integers(0, 3, len(y)).astype(float)          # 模拟 cluster bootstrap 的抽中次数
+    r_w = rates_from_counts(*weighted_counts(y, ypred_all, w))
+    idx = np.repeat(np.arange(len(y)), w.astype(int))     # 等价的显式复制样本
+    r_rep = rates_from_counts(*weighted_counts(y[idx], ypred_all[idx]))
+    for k in CLF_METRICS:
+        assert abs(r_w[k] - r_rep[k]) < 1e-12, (k, r_w[k], r_rep[k])
+    # 全 0 权重 → 全部退化为 None（不得抛异常，bootstrap 里空子群会出现）
+    assert all(v is None for v in rates_from_counts(*weighted_counts(y, ypred_all,
+                                                                     np.zeros(len(y)))).values())
+
+    # --- 4e) threshold_youden：与 roc_curve 上的 argmax(J) 一致，且确为组无关的单一阈值 ---
+    t_j = threshold_youden(y, prob)
+    fpr_g, tpr_g, thr_g = roc_curve(y, prob)
+    assert abs(t_j - thr_g[int(np.argmax(tpr_g - fpr_g))]) < 1e-12
+    pred_j = (prob >= t_j).astype(int)
+    j_at_t = (recall_score(y, pred_j, pos_label=1)
+              - (1.0 - recall_score(y, pred_j, pos_label=0)))
+    for t_other in np.quantile(prob, [0.1, 0.3, 0.5, 0.7, 0.9]):
+        pr = (prob >= t_other).astype(int)
+        j_other = (recall_score(y, pr, pos_label=1)
+                   - (1.0 - recall_score(y, pr, pos_label=0)))
+        assert j_at_t >= j_other - 1e-12, (t_other, j_at_t, j_other)
 
     # --- 5) 单轴数据集（fitzpatrick skin）无 joint 键，marginal_only 不删任何组 ---
     n = 3000

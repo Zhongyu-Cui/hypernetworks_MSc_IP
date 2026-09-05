@@ -10,6 +10,7 @@
 > | OOD 实验 v2（MIMIC↔CheXpert 双向） | [ood_experiment_v2_preregistration.md](ood_experiment_v2_preregistration.md)、[ood_experiment_v2_results.md](ood_experiment_v2_results.md)、[ood_experiment_v2_groupdro.md](ood_experiment_v2_groupdro.md) |
 > | 受控条件化范围消融（E0–E4） | [conditioning_ablation_plan.md](conditioning_ablation_plan.md)、[conditioning_ablation_summary.md](conditioning_ablation_summary.md)、[conditioning_ablation_e1_worstcase_checkpoint.md](conditioning_ablation_e1_worstcase_checkpoint.md)、[conditioning_ablation_e1_pathway_knockout.md](conditioning_ablation_e1_pathway_knockout.md)、[conditioning_ablation_e3_fcoff_training.md](conditioning_ablation_e3_fcoff_training.md) |
 > | HyperAdapt×SWAD 融合（实验 G） | [hyperadapt_swad_fusion_plan.md](hyperadapt_swad_fusion_plan.md)、[hyperadapt_swad_fusion_full_report.md](hyperadapt_swad_fusion_full_report.md) |
+> | 组间 gap 与阈值上的逐组 accuracy（次要终点，2026-09-05 补） | [between_group_gaps_and_accuracy.md](between_group_gaps_and_accuracy.md) |
 >
 > **数字口径**：ID 表一律取自当前权威结果 JSON
 > `outputs/conditioning_ablation/oof_results_averaging.json`（2026-08-11）。
