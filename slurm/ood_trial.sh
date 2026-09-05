@@ -29,7 +29,7 @@
 # 示例（MIMIC ERM + SWAD，选中 config=lr1e-04_wd1e-04 → index 2）：
 #   sbatch --partition=gpus24 --job-name=oodv2_mimic_erm \
 #          --output=logs/oodv2_mimic_erm.%N.%A_%a.log \
-#          --export=ALL,PY_SCRIPT=.../train_mimic_resnet18.py,CONFIG_INDEX=2,SWAD=1 \
+#          --export=ALL,PY_SCRIPT=src/training/train_mimic_resnet18.py,CONFIG_INDEX=2,SWAD=1 \
 #          slurm/ood_trial.sh
 #SBATCH --gres=gpu:1
 #SBATCH --time=0-12:00:00
