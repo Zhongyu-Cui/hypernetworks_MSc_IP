@@ -13,9 +13,11 @@
 >
 > **数字口径**：ID 表一律取自当前权威结果 JSON
 > `outputs/conditioning_ablation/oof_results_averaging.json`（2026-08-11）。
-> ⚠️ `oof_regime_results.md`（2026-07-20 定稿）中 **HyperAdapt 一列**因 2026-08-04 预测重写而略有失配
-> （如 MIMIC marginal-worst Δ 该文记 +0.0022，JSON 现为 +0.0014），**方向与判决均未改变**；
-> 本文以 JSON 为准。
+> ⚠️ `oof_regime_results.md`（2026-07-20 定稿）中 **HyperAdapt 一列**因 2026-08-04 预测重写而失配。
+> **2026-08-30 逐格 diff 订正：不是「MIMIC 一例」，而是四个库全部失配**——
+> HAM `.8873/.8188`→`.8910/.8217`、Fitz `.8987/.8331`→`.8935/.8306`、
+> MIMIC `.8468/.8201`→`.8461/.8192`、CheXpert `.8675/.8354`→`.8677/.8359`（Overall/marginal worst）。
+> **四库 vs-ERM 判决均未改变**；本文与报告一律以 JSON 为准。该文已补挂陈旧提醒横幅。
 
 ---
 

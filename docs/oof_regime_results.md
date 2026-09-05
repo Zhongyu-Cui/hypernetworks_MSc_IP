@@ -5,6 +5,19 @@
 > Fitzpatrick ≈0；**CheXpert / MIMIC 全轴 CI<0 = 决定性 0**；唯一 detected 为 **PAPILA-age**（n=420）。
 > 本文「唯一 `I(Y;age|X)>0`」等标注**已过时**；**性能结论与聚合口径不受影响**，但「有信号/无信号」的分类须按新闸门重读。
 
+> 🛑 **数值陈旧提醒（2026-08-30 补挂，写第 5 章时逐格 diff 发现）**。本文表格**不再是取数口径**，
+> 权威一律为 `outputs/conditioning_ablation/oof_results_averaging.json`。三处已知偏差：
+> 1. **HyperAdapt 一列在四个库上全部失配**（2026-08-04 预测重写，本文 07-16 定稿未回写）：
+>    HAM `.8873/.8188`→`.8910/.8217`、Fitz `.8987/.8331`→`.8935/.8306`、
+>    MIMIC `.8468/.8201`→`.8461/.8192`、CheXpert `.8675/.8354`→`.8677/.8359`（Overall/marginal worst）。
+>    **四库 vs-ERM 判决均不变**（HAM/Fitz/CheXpert n.s.，MIMIC 仍显著），故结论无须改，但**数字不可直接引用**。
+>    ⚠️ `experiments_overview.md` 只记了 MIMIC 一例，实际四库全中。
+> 2. **HAM 的三个 HN 行是 age 单轴臂**。2026-08-28 起报告统一用 **sex+age 双轴** `*_sexage`
+>    （HyperHead `.9031/.8210`、HyperFusion `.8976/.8302`、HyperAdapt `.8980/.8253`），本文的 age-only 一族**已作废**。
+> 3. **方法集已变**：本文含 ROC、无 GroupDRO；报告里 **ROC 全文删除**、**GroupDRO 为第四基线**
+>    （见 `groupdro_baseline_5datasets.md`）。
+> ERM 与 SWAD 两行四库逐位仍有效。
+
 
 > **本版建立 2026-07-16，口径 = averaging，取代 2026-07-10 的 pooled-OOF 版**（旧版见 git 历史）。
 > 生成脚本：`scripts/build_oof_results_averaging.py`；原始数字：

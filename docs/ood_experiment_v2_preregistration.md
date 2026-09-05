@@ -228,3 +228,66 @@ image-only（与 ERM 逐位同构），**无干预面**。这一点本身也是�
 **执行**：阶段 1 补 trial 1/2 训练（MIMIC 作业 75757 / CheXpert 75758，各 5 fold × 2 trial，
 config 为各自 S1 选中 `lr3e-04_wd1e-04` / `lr1e-04_wd1e-03`，batch 与 trial 0 逐项一致）；
 阶段 3 双向 full-target 终评（15 replicate/方向）。trial 0 复用作业 75529/75530 既有 checkpoint。
+
+---
+
+### 偏离 #4 · 范围扩充：加入 **HyperHead** 与 **HyperFusion**，恢复「条件化深度」轴（2026-08-28）
+
+**内容**：§1 冻结的方法集为 ERM / SWAD / HyperAdapt 三臂，偏离 #3 追加 GroupDRO 为四臂。现补入
+比较协议 §1 早已规定、ID 侧五库已全部完成的另两个 HN 变体 **HyperHead** 与 **HyperFusion**，
+两个方向、与既有四臂**完全同口径**（S1 选中 config · 5 fold × 3 trial = 15 replicate · full-target ·
+患者级配对 cluster bootstrap）⇒ 六臂。
+
+**这同时解除 §1 的禁令**：§1 因缺这两臂而规定「v2 不检验条件化深度轴，任何深度结论不得由本实验
+推出」。补齐后 ROC 之外的属性介入深度序列 **Head（仅分类头）< Fusion（单 block）< Adapt（除 stem 外
+全层）** 在 OOD 侧完整，故深度轴可讨论——但**仅限本条追加后按同口径产出的数字**，且见下「探索性附问」
+的限定。
+
+**理由（为何这不是 forking path）**：这两臂不是看到结果后挑出来的方法，而是**协议 §1 六方法表里
+本就有的两格**；v2 冻结时把它们排除是 §7 阶段 1 的 GPU 预算取舍（预算按 3 方法编制），不是基于任何
+OOD 结果。补齐后 OOD 侧方法集与 ID 侧（`docs/oof_regime_results.md`、`docs/crossdataset_worstgroup_fairness.md`）
+同构，这本身是可比性的要求。
+
+**污染披露（写在任何新数字之前，如实标注）**：
+
+| 方向 | 已有预测 | 事前性 |
+|---|---|---|
+| **C→M** | **零**（两方法一张都未计算） | ✅ **完全事前** |
+| **M→C** | **trial 0 的 full-target 预测已存在**（E-audit.2 遗留，5 replicate/方法） | ⚠️ **部分已见** |
+
+M→C 的单-trial 点估计已记录于 `outputs/conditioning_ablation/eaudit_m2c_full_target_results.json`
+（HyperHead marginal-worst 0.8142、HyperFusion 0.8115；vs ERM 的单-trial Δ 分别为 +0.0022 与
+−0.0005）。故 **M→C 方向的 H6/H7 不是完全盲的，须按「部分已见」标注**。缓和情形有二，但不取消披露：
+① 判定所依赖的 **trial 1/2 在本条追加时尚未训练**；② 主文件 §3 已实证 trial 扩充可使符号翻转
+（HyperAdapt C→M：+0.0023 → −0.0025）⇒ 单-trial 先验对 15-replicate 判定的信息量有限。
+
+**新增假设**：
+
+| 编号 | 假设 | 判定方式 |
+|---|---|---|
+| **H6** | S1 下 **HyperHead** 的 marginal-worst AUC 优于 ERM，**两方向复现**，**且**效应量超过训练噪声 | 与 H1/H2/H5 完全同口径：配对 cluster bootstrap 95% CI 下界 > 0 **且** \|d̄\| > σ_train |
+| **H7** | S1 下 **HyperFusion** 同上 | 同上 |
+
+两条**不新设更宽松的判据**，与 H5 逐字同构。
+
+**探索性附问（不进 Holm family，不作显著性声明，不作因果声明）**：属性介入深度
+Head < Fusion < Adapt 是否与 Δ(HN − ERM) 单调相关。**必须标注为探索性**——三臂在**参数量、调制形式
+（乘性 vs 加性）、作用位置、初始化**上多轴同时不同（`docs/conditioning_ablation_summary.md` §1），
+深度不是唯一变化的因子；受控的深度轴由实验 E（`ResNet18CondNet`）负责，本处只作描述。
+
+**统计口径的连带修改（§5 多重比较）**：Holm family 由偏离 #3 的 6 扩为
+`{SWAD, HyperAdapt, GroupDRO, HyperHead, HyperFusion} × {M→C, C→M}` = **10 个检验**，仅在主指标
+（marginal worst-group AUC）上校正。**既有 6 项须按 10-family 重新校正**；若有原「Holm 后保持显著」
+的项在新 family 下不再显著，须在结果文件中如实更新——扩充 family 的必然代价，事前接受。
+
+**校准（D2）**：两臂同口径纳入，**仅作描述性报告**，不为其新增 H3 型判定（与偏离 #3 对 GroupDRO
+的处置一致）。
+
+**不适用的部分**：属性 knockout（结果文件 §5.1b）对两臂**适用**（二者推理期均有属性输入面），但
+本次不列入必做项；若执行须另作记录。
+
+**执行**：阶段 1 补 trial 1/2 训练（4 个 SLURM array 作业 × 10 = 40 run：MIMIC-HyperHead
+`lr1e-04_wd1e-04` / MIMIC-HyperFusion `lr1e-04_wd1e-04` / CheXpert-HyperHead `lr3e-04_wd1e-04` /
+CheXpert-HyperFusion `lr1e-04_wd1e-04`，均为各自 cv5 `selected_configs.json` 的 S1 选中 config；
+**batch 与 trial 0 逐项一致**——trial 0 的 cv 搜索日志为 `BATCH=config`，即 config 默认 128，故本次
+不传 `BATCH` 覆盖）；阶段 3 双向 full-target 终评（trials 0,1,2；M→C trial 0 已存在，自动跳过）。

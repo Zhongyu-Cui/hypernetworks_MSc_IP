@@ -30,6 +30,13 @@
 > 显著，本文件所有数字逐位不变**；GroupDRO 的结果与判定见 `docs/ood_experiment_v2_groupdro.md`
 > （一句话：两方向均显著劣于 ERM，且是全 v2 唯一超过训练噪声的效应——一个负效应）。
 
+> **📌 2026-08-28 范围扩充（二）**：按预注册**偏离 #4** 再加入 **HyperHead** 与 **HyperFusion**
+> 两臂（双向、同口径 15 replicate），新增 **H6/H7** 并将 Holm family 由 6 扩为 **10**。
+> **既有检验在新 family 下全部保持显著，本文件所有数字逐位不变**（已 bit-for-bit 核验）。
+> 两臂结果与「条件化深度轴」的描述性读数见 `docs/ood_experiment_v2_depth_arms.md`
+> （一句话：H6/H7 各自两判据 × 两方向共八项全败；深度在 M→C 上看似单调但整条线落在训练噪声带内、
+> 且 C→M 直接不单调 ⇒ 深度非决定因素，与 ID 侧判决同构）。
+
 ## 2. 主结果（marginal worst-group AUC，full-target，15 replicate）
 
 | 方向 | ERM | SWAD | HyperAdapt | GroupDRO（偏离 #3 追加） |
