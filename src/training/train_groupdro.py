@@ -1,5 +1,5 @@
 """
-GroupDRO 基线通用训练入口（MIMIC / CheXpert / Fitzpatrick / PAPILA）
+GroupDRO 基线通用训练入口（MIMIC / CheXpert / Fitzpatrick）
 =====================================================================
 比较协议 §1 第 4 基线 GroupDRO（Sagawa et al., ICLR 2020）在**除 HAM 外四个数据集**上的训练入口。
 算法本体见 `src/training/harness/groupdro.py`；HAM 有更早写成的专用脚本
@@ -18,7 +18,7 @@ GroupDRO 基线通用训练入口（MIMIC / CheXpert / Fitzpatrick / PAPILA）
 
 **分组**：`GroupIndexer` 复用 `subgroup_masks` 的 canonical 交叉子群 ⇒ 训练所优化的组 =
 报告 worst-group 所 min 的组。各库组数：MIMIC/CheXpert = Sex×Race×Age 8；Fitzpatrick = Skin 6；
-PAPILA = Sex×Age 4。四库均无 HAM 那样的「排除组」，故无需过滤（构造时的互斥完备断言会兜底）。
+三库均无 HAM 那样的「排除组」，故无需过滤（构造时的互斥完备断言会兜底）。
 
 **超参**：lr/wd 走同一 6 配置网格；η 固定论文默认 0.01、C=0，**不进网格**（否则本方法比其它方法
 多一个选择自由度）。
@@ -67,7 +67,7 @@ class DatasetSpec:
             （前者喂 resampling 的 cell 编码，后者喂 GroupIndexer 的 canonical 子群，
             二者是同一个划分的两种编码；main() 里有断言）。
         unpack_fn  : loader 元组 → (images, labels, attrs) 的回调。
-        cv_output_subdir: CV 时 output_dir 是否加 `cv{K}` 子目录（PAPILA 原生全-CV，不加）。
+        cv_output_subdir: CV 时 output_dir 是否加 `cv{K}` 子目录。
     """
 
     erm_module: str
@@ -83,8 +83,6 @@ DATASET_SPECS: dict[str, DatasetSpec] = {
                             unpack_sex_race_age, True),
     "fitzpatrick": DatasetSpec("src.training.train_fitzpatrick_resnet18", ("skin",),
                                unpack_skin, True),
-    "papila": DatasetSpec("src.training.train_papila_resnet18", ("sex", "age"),
-                          unpack_sex_age, False),
 }
 
 
@@ -128,14 +126,8 @@ def resolve_paths(mod, spec: DatasetSpec, cfg: dict, cv: int, fold: int | None) 
     Returns:
         (split_dir, output_dir)。
     """
-    if hasattr(mod, "resolve_paths"):                      # mimic / chexpert / fitzpatrick
-        return mod.resolve_paths(cfg, cv, fold)
-    # papila：只解析 split_dir，输出目录恒为其 OUTPUT_DIR（原生全-CV，无 cv5 子目录）
-    split_dir = mod.resolve_split_dir(cfg, cv, fold)
-    output_dir = mod.OUTPUT_DIR
-    if spec.cv_output_subdir and cv and cv >= 2:
-        output_dir = output_dir / f"cv{cv}"
-    return split_dir, output_dir
+    # 四库的 ERM 模块都提供 resolve_paths（同时给出 split_dir 与 output_dir）
+    return mod.resolve_paths(cfg, cv, fold)
 
 
 def build_loaders(

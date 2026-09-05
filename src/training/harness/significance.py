@@ -293,7 +293,7 @@ def make_subgroup_metric(
     重采样时子群构成随之变化（正确反映不确定度）。
 
     Args:
-        dataset : {"mimic","chexpert","ham10000","fitzpatrick","papila"}。
+        dataset : {"mimic","chexpert","ham10000","fitzpatrick"}。
         y_true  : [N] 0/1 标签。
         y_score : [N] 该 seed 的模型输出。
         attrs   : 该数据集所需属性 {名 -> [N] 数组}（键须匹配 subgroup_auc_vector：sex/race/age/skin）。
@@ -659,22 +659,22 @@ def _selftest_a22() -> None:
     unp_width = np.quantile(unp_diffs, 0.975) - np.quantile(unp_diffs, 0.025)
     assert paired_width < unp_width, (paired_width, unp_width)
 
-    # --- 子群度量闭包（worst-group / gap）在 papila schema 下可跑 ---
-    sex = rng.integers(0, 2, n); age = rng.integers(0, 2, n)
+    # --- 子群度量闭包（worst-group / gap）在 ham10000 schema 下可跑 ---
+    sex = rng.integers(0, 2, n); age = rng.integers(0, 4, n)
     attrs = {"sex": sex, "age": age}
-    m_worst_a = make_subgroup_metric("papila", y, score_a, attrs, "worst")
-    m_worst_b = make_subgroup_metric("papila", y, score_b, attrs, "worst")
+    m_worst_a = make_subgroup_metric("ham10000", y, score_a, attrs, "worst")
+    m_worst_b = make_subgroup_metric("ham10000", y, score_b, attrs, "worst")
     rw = paired_bootstrap_diff(n, m_worst_a, m_worst_b, n_boot=500, rng=3)
     assert rw.n_valid > 0 and rw.point > 0.0  # A 更强 → worst-group 更高
-    m_gap_a = make_subgroup_metric("papila", y, score_a, attrs, "gap")
+    m_gap_a = make_subgroup_metric("ham10000", y, score_a, attrs, "gap")
     _ = paired_bootstrap_diff(n, m_gap_a, m_gap_a, n_boot=300, rng=3)  # 同度量 Δ=0
 
     # --- 多-seed 变体：抽 seed 不报错，Δ 仍 > 0 ---
     seeds_a = [score_a + 0.1 * rng.standard_normal(n) for _ in range(5)]
     seeds_b = [score_b + 0.1 * rng.standard_normal(n) for _ in range(5)]
     ms_rng = np.random.default_rng(11)
-    ma_ms = make_subgroup_metric_multiseed("papila", y, seeds_a, attrs, "worst", ms_rng)
-    mb_ms = make_subgroup_metric_multiseed("papila", y, seeds_b, attrs, "worst", ms_rng)
+    ma_ms = make_subgroup_metric_multiseed("ham10000", y, seeds_a, attrs, "worst", ms_rng)
+    mb_ms = make_subgroup_metric_multiseed("ham10000", y, seeds_b, attrs, "worst", ms_rng)
     rms = paired_bootstrap_diff(n, ma_ms, mb_ms, n_boot=500, rng=ms_rng)
     assert rms.n_valid > 0 and rms.point is not None
 

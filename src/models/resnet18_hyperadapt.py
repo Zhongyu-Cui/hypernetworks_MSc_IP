@@ -886,7 +886,7 @@ class ResNet18HyperAdaptSoftSkin(ResNet18HyperAdapt):
 
 class ResNet18HyperAdaptSoftAge(ResNet18HyperAdapt):
     """
-    HAM10000 / PAPILA 的 **pred-attr** HyperAdapt：forward 签名 (image, age_prob)，
+    HAM10000 的 **pred-attr** HyperAdapt：forward 签名 (image, age_prob)，
     age_prob 为 g 输出的 [B, num_age] softmax。其余同 ResNet18HyperAdaptAge。
 
     Args:

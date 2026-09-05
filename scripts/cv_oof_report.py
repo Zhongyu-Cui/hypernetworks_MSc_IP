@@ -72,7 +72,6 @@ def _ham_age_filter(attrs: dict[str, np.ndarray]) -> np.ndarray:
 # subgroup key 用于 subgroup_auc_vector/subgroup_masks；npz attr 键名与其 kwargs 同名，直接 splat。
 DATASET_SPEC: dict[str, tuple[str, str, Callable[[dict[str, np.ndarray]], np.ndarray] | None]] = {
     "ham10000":    ("ham10000/cv5/predictions",    "ham10000",    _ham_age_filter),
-    "papila":      ("papila/predictions",          "papila",      None),
     "fitzpatrick": ("fitzpatrick/cv5/predictions", "fitzpatrick", None),
     "chexpert":    ("chexpert_cxr/cv5/predictions", "chexpert",   None),
     "mimic":       ("mimic_cxr/cv5/predictions",   "mimic",       None),

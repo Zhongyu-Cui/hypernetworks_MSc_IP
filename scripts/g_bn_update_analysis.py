@@ -37,7 +37,7 @@ ARMS = ("erm", "swad", "hyperadapt", "hyperadapt_swad")
 BNUPD_ARMS = ("swad", "hyperadapt_swad")
 METRIC_NAMES = ("Overall", "canonical worst", "marginal worst", "gap")
 OUT_DIR = OUTPUTS / "analysis" / "g_fusion"
-# 只有这四个 ID regime 有 cv5_bnupd 产物（PAPILA 无 SWAD 臂，OOD 另由校准脚本处理）
+# 只有这四个 ID regime 有 cv5_bnupd 产物（OOD 另由校准脚本处理）
 ID_SPECS = ("HAM10000", "Fitzpatrick", "MIMIC", "CheXpert")
 
 

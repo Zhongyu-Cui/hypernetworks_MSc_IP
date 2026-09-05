@@ -83,8 +83,6 @@ class Spec:
 SPECS = [
     Spec("HAM10000", "ham10000/cv5/predictions", "ham10000", "ham10000/cv5",
          "ham10000", "lesion_id", True),
-    Spec("PAPILA", "papila/predictions", "papila", "papila",
-         "papila", "pid", False),
     Spec("Fitzpatrick", "fitzpatrick/cv5/predictions", "fitzpatrick", "fitzpatrick/cv5",
          None, None, False),
     Spec("MIMIC", "mimic_cxr/cv5/predictions", "mimic", "mimic_cxr/cv5",

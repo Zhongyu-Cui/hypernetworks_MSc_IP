@@ -34,11 +34,10 @@ MODULES = {
     "chexpert": ("src.training.train_cxr_hyperadapt_pred", "chexpert"),
     "ham10000": ("src.training.train_ham10000_hyperadapt_pred", None),
     "fitzpatrick": ("src.training.train_fitzpatrick_hyperadapt_pred", None),
-    "papila": ("src.training.train_papila_hyperadapt_pred", None),
 }
 FOLD_SEED_BASE = 42        # fold k ↔ seed 42+k（与既有 CV 布局一致）
 # 各库 pred 臂使用的超参网格序号 = 该库 GT-HyperAdapt 的 Pareto 选定配置（与训练脚本的默认值一致）
-CONFIG_INDEX = {"mimic": 3, "chexpert": 4, "ham10000": 0, "fitzpatrick": 5, "papila": 5}
+CONFIG_INDEX = {"mimic": 3, "chexpert": 4, "ham10000": 0, "fitzpatrick": 5}
 
 
 def parse_args() -> argparse.Namespace:

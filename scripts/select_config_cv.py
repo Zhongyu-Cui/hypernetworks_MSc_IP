@@ -2,7 +2,7 @@
 CV-OOF 折均 marginal-worst config 选择器（方案 S1，5 数据集通用）
 ==================================================================
 `docs/oof_selection_rollout_plan.md` 三决策之②：**config 选择（6→1）用「折均 marginal-worst」**
-（minimax，平手用折均 Overall 破）。本脚本把 `select_pareto_papila_cv.py`（PAPILA 专用、canonical
+（minimax，平手用折均 Overall 破）。本脚本把早期 PAPILA 专用的折聚合选择器（canonical
 worst + Pareto 前沿）泛化为**数据集参数化**、且把选择信号从 canonical-worst 换成 **marginal-worst**。
 
 **三决策口径（与方案文档一致）**：
@@ -21,7 +21,7 @@ Overall 破」——即在折均候选上直接取 marginal-worst 最大者。Pa
 
 用法：
   python scripts/select_config_cv.py --dataset ham10000            # 4 方法各选一个 config
-  python scripts/select_config_cv.py --dataset papila --method erm
+  python scripts/select_config_cv.py --dataset ham10000 --method erm
   python scripts/select_config_cv.py --self-test                   # 逻辑自检
 """
 
@@ -38,11 +38,10 @@ from src.paths import OUTPUTS_DIR
 
 OUTPUTS_ROOT = OUTPUTS_DIR
 
-# 数据集 → val 日志目录（PAPILA 原生全-CV 无 cv5 子目录；余者走 cv5/）。
+# 数据集 → val 日志目录（均走 cv5/）。
 # 键为 subgroup_auc 的数据集 key；值为 outputs 下相对目录。
 DATASET_VAL_LOG_DIR: dict[str, str] = {
     "ham10000": "ham10000/cv5/val_logs",
-    "papila": "papila/val_logs",
     "fitzpatrick": "fitzpatrick/cv5/val_logs",
     "chexpert": "chexpert_cxr/cv5/val_logs",
     "mimic": "mimic_cxr/cv5/val_logs",

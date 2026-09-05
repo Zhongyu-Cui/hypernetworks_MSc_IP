@@ -35,7 +35,7 @@ GroupDRO 的重加权**不需要**条件信号，它只是拿 Overall 换 worst-
 一组）——HAM 的 `age_group==-1`（0-20 排除组）不属任何交叉键，故 HAM 侧训练须先过滤 `age>=0`
 （与 3 个 HN 训练脚本同口径），否则此处显式报错而非静默漏样本。
 
-各数据集组数：mimic/chexpert = Sex×Race×Age 8；ham10000 = Sex×Age 8；papila = Sex×Age 4；
+各数据集组数：mimic/chexpert = Sex×Race×Age 8；ham10000 = Sex×Age 8；
 fitzpatrick = Skin 6。
 
 自检：`python -m src.training.harness.groupdro`
@@ -61,7 +61,6 @@ GROUP_ATTRS: dict[str, tuple[str, ...]] = {
     "mimic": ("sex", "race", "age"),
     "chexpert": ("sex", "race", "age"),
     "ham10000": ("sex", "age"),
-    "papila": ("sex", "age"),
     "fitzpatrick": ("skin",),
 }
 
@@ -78,7 +77,7 @@ class GroupIndexer:
     def __init__(self, dataset: str) -> None:
         """
         Args:
-            dataset: {"mimic","chexpert","ham10000","fitzpatrick","papila"} 之一。
+            dataset: {"mimic","chexpert","ham10000","fitzpatrick"} 之一。
 
         Raises:
             ValueError: 数据集未在 GROUP_ATTRS 中登记。
@@ -354,7 +353,6 @@ def _selftest() -> None:
         assert "age_group==-1" in str(e)
     # 其余数据集组数
     assert GroupIndexer("mimic").n_groups == 8 and GroupIndexer("chexpert").n_groups == 8
-    assert GroupIndexer("papila").n_groups == 4
     fitz = GroupIndexer("fitzpatrick")
     assert fitz.n_groups == 6 and all("|" not in k for k in fitz.keys)  # 单轴退化为 6 肤色组
 

@@ -95,7 +95,7 @@ class RunSpec:
     一次训练运行的唯一标识 (method, config_tag, seed)，外加数据集名（用于日志自解释）。
 
     Attributes:
-        dataset   : 数据集名（{"mimic","chexpert","ham10000","fitzpatrick","papila"}）。
+        dataset   : 数据集名（{"mimic","chexpert","ham10000","fitzpatrick"}）。
         method    : 方法名（TRAINABLE_METHODS 之一）。
         config_tag: 超参配置标识（HParamConfig.tag，如 "lr1e-04_wd1e-04"）。
         seed      : 随机种子。
@@ -225,9 +225,9 @@ def _selftest() -> None:
 
     # RunSpec.from_hparam 便捷构造
     cfg2 = next(iter_hparam_grid())
-    spec = RunSpec.from_hparam("papila", "erm", cfg2, 42)
+    spec = RunSpec.from_hparam("fitzpatrick", "erm", cfg2, 42)
     assert spec.run_id == f"erm_{cfg2.tag}_seed42"
-    assert spec.checkpoint_path("outputs/papila", "overall").name.endswith("_best_overall.pth")
+    assert spec.checkpoint_path("outputs/fitzpatrick", "overall").name.endswith("_best_overall.pth")
 
     # seed 规程符合协议
     assert SEEDS_SEARCH == (42,) and SEEDS_CONFIRM == (42, 43, 44, 45, 46)

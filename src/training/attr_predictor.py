@@ -47,7 +47,7 @@ PROBE_MAX_ITER: int = 2000
 # 特征抽取
 # ============================================================
 def load_rgb(path: str) -> Image.Image:
-    """自然 RGB 图像 loader（Fitzpatrick preproc_224x224 / HAM images / PAPILA 眼底）。"""
+    """自然 RGB 图像 loader（Fitzpatrick preproc_224x224 / HAM images）。"""
     return Image.open(path).convert("RGB")
 
 
@@ -336,7 +336,7 @@ def save_fold_predictions(
     Args:
         out_dir   : `<outputs>/<ds>/cv5/attr_pred/fold{k}`（自动创建）。
         split_name: "train"/"val"/"test"。
-        keys      : [N] 样本唯一键（Fitzpatrick: md5hash；HAM: image_id；CXR/PAPILA: image_path），
+        keys      : [N] 样本唯一键（Fitzpatrick: md5hash；HAM: image_id；CXR: image_path），
                     用于与训练侧按键 join。
         axes      : {轴名 -> ([N, C] 校准后概率, [N] 真值索引)}。
 

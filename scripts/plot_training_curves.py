@@ -14,7 +14,7 @@
   - `--mode per-seed` ：每个 (数据集×方法) 单独一张图，画出全部 5 seed 各自曲线（不平均，
                         画至各自早停长度），输出到子文件夹。
 
-PAPILA 为全-CV：run_id 的 seed 与折一一映射（seed=42+fold），故其「5 seed」实为「5 折」，
+CV 数据集的 run_id seed 与折一一映射（seed=42+fold），故其「5 seed」实为「5 折」，
 方差含折间差异，图注与图例已标注。
 
 用法：
@@ -56,7 +56,6 @@ SELECTED_CONFIGS: dict[str, dict[str, str]] = {
     "mimic":       {"erm": "lr3e-04_wd1e-03", "hyperhead": "lr1e-04_wd1e-04", "hyperfusion": "lr1e-04_wd1e-04", "hyperadapt": "lr3e-04_wd1e-04"},
     "chexpert":    {"erm": "lr3e-04_wd1e-03", "hyperhead": "lr3e-05_wd1e-03", "hyperfusion": "lr1e-04_wd1e-04", "hyperadapt": "lr3e-04_wd1e-03"},
     "fitzpatrick": {"erm": "lr1e-04_wd1e-03", "hyperhead": "lr1e-04_wd1e-04", "hyperfusion": "lr3e-04_wd1e-04", "hyperadapt": "lr1e-04_wd1e-03"},
-    "papila":      {"erm": "lr3e-04_wd1e-04", "hyperhead": "lr3e-04_wd1e-04", "hyperfusion": "lr1e-04_wd1e-03", "hyperadapt": "lr3e-04_wd1e-04"},
 }
 
 
@@ -76,7 +75,6 @@ DATASETS: tuple[DatasetInfo, ...] = (
     DatasetInfo("mimic", "MIMIC-CXR  (I≈0 · 干净负控制)", "mimic_cxr", "mimic"),
     DatasetInfo("chexpert", "CheXpert  (I<MDE · 不可判定)", "chexpert_cxr", "chexpert"),
     DatasetInfo("fitzpatrick", "Fitzpatrick17k  (I<MDE · 不可判定)", "fitzpatrick", "fitzpatrick"),
-    DatasetInfo("papila", "PAPILA  (灰区 · 全-CV / 5 折)", "papila", "papila", is_cv=True),
 )
 DS_BY_KEY: dict[str, DatasetInfo] = {d.key: d for d in DATASETS}
 
@@ -122,7 +120,7 @@ def load_auc_curve(ds: DatasetInfo, method: str, config_tag: str, seed: int) -> 
         ds: 数据集信息（用 val_log_dir 定位）。
         method: 方法名。
         config_tag: 超参配置标识（如 "lr1e-04_wd1e-04"）。
-        seed: 随机种子（PAPILA 下即折号 42+fold）。
+        seed: 随机种子（CV 下即折号 42+fold）。
 
     Returns:
         Curve（仅填 overall_auc / worst_auc），文件不存在时返回 None。
@@ -312,7 +310,7 @@ def plot_mean_grid(metric: str, loss_runs: dict[tuple[str, str, str, int], Curve
     fig.suptitle(f"选定配置的 5-seed 确认训练 {what} 曲线（逐 epoch，均值 over 全存活 seed）",
                  fontsize=13, fontweight="bold", y=0.972)
     fig.text(0.5, 0.005, "注：只画全部 5 seed 仍在训练的 epoch 段（早停致各 seed 长度不一）；"
-             "PAPILA 为全-CV，seed=fold，方差含折间差异。", ha="center", fontsize=8.5, color=MUTED)
+             "CV regime 下 seed=fold，方差含折间差异。", ha="center", fontsize=8.5, color=MUTED)
     fig.tight_layout(rect=(0, 0.012, 1, 0.955))
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=150, bbox_inches="tight", facecolor="white")

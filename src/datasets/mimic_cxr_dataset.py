@@ -18,7 +18,7 @@ MIMIC-CXR No Finding 二分类 Dataset（MEDFAIR 对齐）。
 
 用法:
     与 UTKFaceCSVDataset 对齐，forward 签名一致，便于直接复用所有
-    属性融合模型 (ResNet18AttrConcat / HyperHead / HyperAdapt / HyperFusion)。
+    属性融合模型 (HyperHead / HyperAdapt / HyperFusion)。
 """
 
 from pathlib import Path

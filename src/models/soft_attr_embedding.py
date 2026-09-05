@@ -78,10 +78,10 @@ class SoftSkinEmbedding(nn.Module):
 
 class SoftAgeEmbedding(nn.Module):
     """
-    HAM10000 / PAPILA 的**软** age 条件通路（对应 `resnet18_hyperadapt.AgeEmbedding`）。
+    HAM10000 的**软** age 条件通路（对应 `resnet18_hyperadapt.AgeEmbedding`）。
 
     Args:
-        num_age      : age_group 有效类别数（HAM: 4；PAPILA: 2）。
+        num_age      : age_group 有效类别数（HAM: 4）。
         cat_embed_dim: age embedding 维度。
         out_dim      : profile vector 维度。
     """

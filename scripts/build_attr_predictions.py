@@ -58,7 +58,7 @@ def tf_fitzpatrick(cfg: dict) -> transforms.Compose:
 
 
 def tf_resize_crop(cfg: dict) -> transforms.Compose:
-    """HAM / PAPILA：Resize(256) → CenterCrop(224)（MEDFAIR 口径）。"""
+    """HAM：Resize(256) → CenterCrop(224)（MEDFAIR 口径）。"""
     e = cfg["transforms"]["eval"]
     return transforms.Compose([
         transforms.Resize(tuple(e["resize"])), transforms.CenterCrop(e["center_crop"]),
@@ -153,17 +153,6 @@ DATASET_SPECS: dict[str, dict] = {
         "image_loader": load_cxr_16bit,
         "row_filter": None,
         "path_resolver": lambda p: p.replace("512x512", "224x224"),
-    },
-    "papila": {
-        "config": "configs/papila_baseline.yaml",
-        "split_dir": "data/splits/papila",
-        # PAPILA 的 CV 产物不放 cv5 子目录（output_dir 不随 cv 变，见 train_papila_*）
-        "attr_root": "papila/attr_pred",
-        "key_col": "image_path",
-        "axes": {"age": {"col": "age_group", "num_classes": 2}},
-        "transform": tf_resize_crop,
-        "image_loader": load_rgb,
-        "row_filter": None,
     },
 }
 

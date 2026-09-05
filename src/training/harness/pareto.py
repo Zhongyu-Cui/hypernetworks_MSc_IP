@@ -416,13 +416,13 @@ def _selftest() -> None:
     # --- collapse_candidate：overall vs worstcase 选不同 epoch ---
     rng = np.random.default_rng(3)
     n = 1200
-    y = rng.integers(0, 2, n); sex = rng.integers(0, 2, n); age = rng.integers(0, 2, n)
+    y = rng.integers(0, 2, n); sex = rng.integers(0, 2, n); age = rng.integers(0, 4, n)
     recs = []
     for epoch, (snr_ov, snr_wc) in enumerate([(0.7, 0.2), (0.4, 0.6)], start=1):
         # epoch1 overall 高、epoch2 worst 高（用两套分数近似）
         score = snr_ov * y + rng.standard_normal(n)
         rec = build_val_record(
-            dataset="papila", method="erm", config_tag="lr1e-04_wd1e-04", lr=1e-4, wd=1e-4,
+            dataset="ham10000", method="erm", config_tag="lr1e-04_wd1e-04", lr=1e-4, wd=1e-4,
             seed=42, epoch=epoch, y_true=y, y_score=score,
             overall_auc=float(roc_auc_score(y, score)), sex=sex, age=age,
         )
@@ -441,7 +441,7 @@ def _selftest() -> None:
             score = base * y + rng.standard_normal(n)
             lr = float(tag.split("_")[0][2:]); wd = float(tag.split("wd")[1])
             rec = build_val_record(
-                dataset="papila", method="hyperfusion", config_tag=tag, lr=lr, wd=wd,
+                dataset="ham10000", method="hyperfusion", config_tag=tag, lr=lr, wd=wd,
                 seed=42, epoch=1, y_true=y, y_score=score,
                 overall_auc=float(roc_auc_score(y, score)), sex=sex, age=age,
             )

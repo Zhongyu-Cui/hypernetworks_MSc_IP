@@ -33,7 +33,7 @@ class ValRecord:
     单个候选在单个 epoch 的验证集评估记录（一条 JSONL 行）。
 
     Attributes:
-        dataset       : 数据集名（{"mimic","chexpert","ham10000","fitzpatrick","papila"}）。
+        dataset       : 数据集名（{"mimic","chexpert","ham10000","fitzpatrick"}）。
         method        : 方法名（"erm"/"hyperhead"/"hyperfusion"/"hyperadapt" 等）。
         config_tag    : 超参配置标识（hparam_grid.HParamConfig.tag，如 "lr1e-04_wd1e-04"）。
         lr, wd        : 该配置的学习率 / 权重衰减（冗余存一份，便于日志自解释）。
@@ -214,7 +214,7 @@ def _selftest() -> None:
             score = snr * y + rng.standard_normal(n)
             from sklearn.metrics import roc_auc_score
             rec = build_val_record(
-                dataset="papila", method="erm", config_tag="lr1e-04_wd1e-04",
+                dataset="ham10000", method="erm", config_tag="lr1e-04_wd1e-04",
                 lr=1e-4, wd=1e-4, seed=42, epoch=epoch,
                 y_true=y, y_score=score, overall_auc=float(roc_auc_score(y, score)),
                 sex=sex, age=age_group,
@@ -225,7 +225,7 @@ def _selftest() -> None:
         assert len(recs) == 3, len(recs)
         # round-trip：字段与子群向量键完全保留
         assert recs[1].config_tag == "lr1e-04_wd1e-04" and recs[1].seed == 42
-        assert len(recs[0].subgroup_auc) == 8  # papila 维度
+        assert len(recs[0].subgroup_auc) == 14  # ham10000 维度
         assert list(recs[0].subgroup_auc.keys()) == list(recs[2].subgroup_auc.keys())  # 键对齐
         # best_overall 选择可复现：epoch 2（snr=0.6）overall 最高
         best_overall = max(recs, key=lambda r: r.overall_auc)

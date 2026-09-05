@@ -110,7 +110,6 @@ def arms_and_contrasts(cond: str) -> tuple[tuple[str, ...], tuple[str, ...], tup
             "p_pred_attr_sexage_results.json")
 
 # 与 build_oof_results_averaging.SPECS 的对应条目逐字段一致（同一寻址与口径）。
-# 注意 PAPILA：CV 产物不放 cv5 子目录（output_dir 不随 cv 变，见 train_papila_*）。
 DATASET_SPECS: dict[str, Spec] = {
     "fitzpatrick": Spec("Fitzpatrick", "fitzpatrick/cv5/predictions", "fitzpatrick",
                         "fitzpatrick/cv5", None, None, False),
@@ -120,8 +119,6 @@ DATASET_SPECS: dict[str, Spec] = {
                   "mimic_cxr/cv5", "mimic_cxr_nofinding", "patient_id", False),
     "chexpert": Spec("CheXpert", "chexpert_cxr/cv5/predictions", "chexpert",
                      "chexpert_cxr/cv5", "chexpert_nofinding", "patient_id", False),
-    "papila": Spec("PAPILA", "papila/predictions", "papila",
-                   "papila", "papila", "pid", False),
 }
 METRIC_KEYS = ("overall", "canonical_worst", "marginal_worst", "gap")
 
@@ -291,7 +288,7 @@ def main() -> None:
                   f"p={p_raw:.3f}  {'显著' if sig else 'n.s.'}")
         contrasts[f"{arm}_vs_{base}"] = entry
 
-    # 输出与该 regime 的 selected_configs.json 同目录（PAPILA 无 cv5 子目录，故不能硬编码 cv5）
+    # 输出与该 regime 的 selected_configs.json 同目录（不硬编码 cv5）
     # ---- 主要终点的多重校正（Holm，family = 前 N_PREREGISTERED 个预注册对比）----
     family = {}
     for arm, base in contrast_pairs[:N_PREREGISTERED]:

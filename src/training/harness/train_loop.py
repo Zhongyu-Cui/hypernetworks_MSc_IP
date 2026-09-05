@@ -64,7 +64,7 @@ FairnessReportFn = Callable[[np.ndarray, np.ndarray, dict[str, np.ndarray]], Non
 # 实验 P（Predicted-Attribute HyperAdapt）会在 attrs 里额外放 `soft_<axis>` 的 [B, C] 概率矩阵作为
 # 超网络的条件输入；它**不是分组属性**（分组永远用真值属性），故 splat 前必须过滤，落盘时改走
 # save_predictions 的 `extra` 通道。见 docs/predicted_attribute_hyperadapt_plan.md §4/§5。
-GROUP_ATTR_KEYS: frozenset[str] = frozenset({"sex", "race", "age", "skin", "a_syn"})
+GROUP_ATTR_KEYS: frozenset[str] = frozenset({"sex", "race", "age", "skin"})
 
 # 可选的**训练目标**替换（默认 None = 普通 BCE 均值）。签名 (logits, labels, attrs) -> 标量 loss，
 # 使需要子群标签的目标（GroupDRO）能拿到 attrs。只作用于训练；val/test 恒用普通 BCE，保证早停、
@@ -82,7 +82,7 @@ def unpack_skin(batch: Batch) -> tuple[torch.Tensor, torch.Tensor, Attrs]:
 
 
 def unpack_sex_age(batch: Batch) -> tuple[torch.Tensor, torch.Tensor, Attrs]:
-    """HAM10000 / PAPILA：loader 返回 (image, label, sex, age_group) → attrs={sex, age}。"""
+    """HAM10000：loader 返回 (image, label, sex, age_group) → attrs={sex, age}。"""
     images, labels, sex, age = batch
     return images, labels, {"sex": sex, "age": age}
 
@@ -91,12 +91,6 @@ def unpack_sex_race_age(batch: Batch) -> tuple[torch.Tensor, torch.Tensor, Attrs
     """MIMIC / CheXpert：loader 返回 (image, label, sex, race, age) → attrs={sex, race, age}。"""
     images, labels, sex, race, age = batch
     return images, labels, {"sex": sex, "race": race, "age": age}
-
-
-def unpack_asyn(batch: Batch) -> tuple[torch.Tensor, torch.Tensor, Attrs]:
-    """MIMIC-synth（R1）：loader 返回 (image, label, a_syn) → attrs={a_syn}。"""
-    images, labels, a_syn = batch
-    return images, labels, {"a_syn": a_syn}
 
 
 # ============================================================
@@ -113,7 +107,7 @@ def forward_skin(model: nn.Module, images: torch.Tensor, attrs: Attrs) -> torch.
 
 
 def forward_age(model: nn.Module, images: torch.Tensor, attrs: Attrs) -> torch.Tensor:
-    """HAM / PAPILA HN：model(image, age)（单一 age 通路）。"""
+    """HAM HN：model(image, age)（单一 age 通路）。"""
     return model(images, attrs["age"].to(images.device, non_blocking=True))
 
 
@@ -139,11 +133,6 @@ def forward_sex_race_age(model: nn.Module, images: torch.Tensor, attrs: Attrs) -
     )
 
 
-def forward_asyn(model: nn.Module, images: torch.Tensor, attrs: Attrs) -> torch.Tensor:
-    """MIMIC-synth HN（R1）：model(image, a_syn)（单一二值合成属性通路，复用 *Age(num_age=2)）。"""
-    return model(images, attrs["a_syn"].to(images.device, non_blocking=True))
-
-
 # ---- 实验 P（Predicted-Attribute）：条件输入是 g 的属性概率，分组属性仍为真值 ----
 def unpack_skin_soft(batch: Batch) -> tuple[torch.Tensor, torch.Tensor, Attrs]:
     """Fitzpatrick + SoftAttrDataset：loader 返回 (image, label, skin, skin_prob)
@@ -153,7 +142,7 @@ def unpack_skin_soft(batch: Batch) -> tuple[torch.Tensor, torch.Tensor, Attrs]:
 
 
 def unpack_sex_age_soft(batch: Batch) -> tuple[torch.Tensor, torch.Tensor, Attrs]:
-    """HAM / PAPILA + SoftAttrDataset：loader 返回 (image, label, sex, age, age_prob)
+    """HAM + SoftAttrDataset：loader 返回 (image, label, sex, age, age_prob)
     → attrs={sex, age(真值,分组用), soft_age([B,C] 条件输入)}。"""
     images, labels, sex, age, age_prob = batch
     return images, labels, {"sex": sex, "age": age, "soft_age": age_prob}
@@ -165,7 +154,7 @@ def forward_soft_skin(model: nn.Module, images: torch.Tensor, attrs: Attrs) -> t
 
 
 def forward_soft_age(model: nn.Module, images: torch.Tensor, attrs: Attrs) -> torch.Tensor:
-    """HAM / PAPILA pred-attr HN：model(image, age_prob)。"""
+    """HAM pred-attr HN：model(image, age_prob)。"""
     return model(images, attrs["soft_age"].to(images.device, non_blocking=True))
 
 
@@ -517,7 +506,7 @@ def run_training(
     val 日志每次运行前清空重写（避免 append 到旧 run 记录）。
 
     Args:
-        dataset: {"mimic","chexpert","ham10000","fitzpatrick","papila"}。
+        dataset: {"mimic","chexpert","ham10000","fitzpatrick"}。
         method : {"erm","hyperhead","hyperfusion","hyperadapt"}。
         output_dir: 该数据集 outputs 根（如 outputs/ham10000）。
         cfg: 该数据集 yaml 配置（training / early_stopping 段）。

@@ -98,7 +98,7 @@ class SoftAttrDataset(Dataset):
     """
     包装 base dataset，在每个样本的返回元组末尾追加**一份或多份**属性概率向量。
 
-    单轴（Fitzpatrick skin / HAM age / PAPILA age）追加 1 个向量；多轴（MIMIC / CheXpert 的
+    单轴（Fitzpatrick skin / HAM age）追加 1 个向量；多轴（MIMIC / CheXpert 的
     sex/race/age）按给定顺序追加多个向量，顺序须与训练侧 unpack 回调的解包顺序一致。
 
     Args:
