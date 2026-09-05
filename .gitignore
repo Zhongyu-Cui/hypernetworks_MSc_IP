@@ -56,3 +56,6 @@ report/build/
 *.run.xml
 *.synctex.gz
 *.toc
+
+# Claude Code 的项目指令（含集群细节与个人绝对路径，不随代码库分发）
+CLAUDE.md
