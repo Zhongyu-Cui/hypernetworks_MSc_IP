@@ -100,6 +100,11 @@ SLURM 作业另有三个：`HN_REPO_ROOT`（仓库位置）、`HN_CONDA_ACTIVATE
 
 训练必须提交到 GPU 集群，分析与可视化脚本只用 CPU。
 
+条件化模型逐样本生成一套权重，故 `HyperAdapt` 与 `CondNet` 各 cell 在同一 batch 下的显存
+需求远高于基线：全流程用的 batch=128 在 4 GB 卡上放不下（实测 OOM 于第一层 adapted conv），
+这也是 HN 臂投 gpus48 的原因。降 batch 可以在任何卡上跑起来（实测 batch=16 正常训练），
+但那会破坏与基线的等-batch 对照，只适合冒烟测试。
+
 ## 数据与划分
 
 四个数据集均为公开去标识化数据，需自行取得访问权限后放到本地，再用环境变量指到对应位置。
@@ -290,8 +295,9 @@ python scripts/viz_hyperplane_ham_sexage.py                     # HAM（报告�
 python scripts/viz_hyperadapt_hyperplane_mimic.py               # MIMIC
 python scripts/viz_hyperadapt_hyperplane_chexpert.py            # CheXpert
 python scripts/viz_hyperadapt_hyperplane_fitzpatrick.py         # Fitzpatrick
-python scripts/viz_ood_hyperplane_cxr.py                        # 迁移下的超平面几何
-python scripts/viz_blind_hyperplane.py --dataset ham            # 属性盲基线（ERM/SWAD）的对照
+python scripts/viz_blind_hyperplane.py --dataset ham --method erm   # 属性盲基线的对照（--method erm|swad）
+# 迁移几何复用同分布产物，须先跑上面两个 CXR 脚本
+python scripts/viz_ood_hyperplane_cxr.py --direction m2c
 
 # 属性扫掠下的 Δθ 权重轨迹（不需要图像）
 python scripts/viz_hyperadapt_weight_trajectory.py              # HAM，age 连续扫掠

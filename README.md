@@ -113,6 +113,13 @@ submit from.
 
 Training belongs on a GPU cluster. The analysis and plotting scripts run on CPU.
 
+The conditioned models build one set of weights per sample, so `HyperAdapt` and the
+`CondNet` cells need far more memory at a given batch size than the baselines do:
+at the batch size of 128 used throughout they do not fit on a 4 GB card, which is
+why the hypernetwork arms are submitted to `gpus48`. Lowering the batch size makes
+them run anywhere, but it also breaks the equal-batch comparison against the
+baselines, so keep it for smoke tests only.
+
 ## Data and splits
 
 All four datasets are public and de-identified; obtain access yourself, place them
@@ -337,8 +344,10 @@ python scripts/viz_hyperplane_ham_sexage.py                     # HAM (the sex+a
 python scripts/viz_hyperadapt_hyperplane_mimic.py               # MIMIC
 python scripts/viz_hyperadapt_hyperplane_chexpert.py            # CheXpert
 python scripts/viz_hyperadapt_hyperplane_fitzpatrick.py         # Fitzpatrick17k
-python scripts/viz_ood_hyperplane_cxr.py                        # the same geometry under transfer
-python scripts/viz_blind_hyperplane.py --dataset ham            # attribute-blind baselines for contrast
+python scripts/viz_blind_hyperplane.py --dataset ham --method erm   # attribute-blind baseline for contrast
+# The transfer geometry reuses the in-distribution artefacts, so run the two chest
+# X-ray scripts above first
+python scripts/viz_ood_hyperplane_cxr.py --direction m2c
 
 # Weight trajectories under an attribute sweep (no images needed)
 python scripts/viz_hyperadapt_weight_trajectory.py              # HAM, age swept continuously
