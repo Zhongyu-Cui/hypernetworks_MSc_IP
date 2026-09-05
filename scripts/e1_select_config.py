@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 
 import numpy as np
@@ -105,12 +106,18 @@ def collect(dataset: str, cell: str, config_tag: str, candidate_groups: list[str
     return float(np.mean(worsts)), float(np.mean(overalls)), len(worsts)
 
 
+# 6 配置网格的 tag 形状（lr3e-05_wd1e-04 等）。用它过滤，因为 glob 的 `{cell}_*` 会连带匹配到
+# 派生臂的日志：E3 敏感性实验把 C-Deep/C-Full 的 no-fc 变体写成 `condnet_deep_nofc_<tag>`，
+# 前缀与 `condnet_deep` 相同，不过滤就会让本函数返回 7 个 tag 并触发下游断言。
+CONFIG_TAG_RE = re.compile(r"^lr[0-9eE.+-]+_wd[0-9eE.+-]+$")
+
+
 def discover_configs(dataset: str, cell: str) -> list[str]:
     """从 fold0 的 val_logs 发现该 cell 跑过的全部 config_tag（应为 6 个）。"""
     d = ABLATION_ROOT / DATASET_SPEC[dataset][0] / f"cv{N_FOLDS}" / "fold0" / "val_logs"
     tags = sorted({p.name[len(cell) + 1:-len(f"_seed{SEARCH_SEED}.jsonl")]
                    for p in d.glob(f"{cell}_*_seed{SEARCH_SEED}.jsonl")})
-    return tags
+    return [t for t in tags if CONFIG_TAG_RE.match(t)]
 
 
 def main() -> None:

@@ -5,7 +5,7 @@
 # 动机：selection_strategy_probe 证「单-split 下 val 选择信号与 test worst-group 反相关
 # （ρ≈−0.2~−0.3，全策略失效）」。要检验「fold-mean 折均能否把这个负相关救成正」，须有
 # **6 config × 5 折**的 CV 预测（现有路线 A 只训了选定 1 config × 5 折，无法做折均选择）。
-# 本脚本对齐 PAPILA 的 c_search_papila_cv.sh，把 HAM 从「单-split + 5-seed」升级为「6 config × 5 折」，
+# 本脚本把 HAM 从「单-split + 5-seed」升级为「6 config × 5 折」，
 # 使 config 选择走 CV 内折均-minimax（PAPILA 式，无泄漏），并让 OOF 池化(n=9707)成为可信 test 目标。
 #
 # 与路线 A(c1_ham_cv_oof.sh)的区别：路线 A array 0–4（固定 config × 5 折）；本脚本 array 0–29

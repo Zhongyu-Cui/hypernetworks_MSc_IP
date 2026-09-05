@@ -6,7 +6,7 @@
 # array 0–4 → fold；每个任务处理该折的全部四臂（soft/hard/perm/const）。
 #
 # 经 --export 注入：
-#   DS    : 数据集名（mimic / chexpert / ham10000 / fitzpatrick / papila）
+#   DS    : 数据集名（mimic / chexpert / ham10000 / fitzpatrick）
 #   MODES : 可选，空格分隔的模式子集（缺省全部四臂）
 #
 # 示例：

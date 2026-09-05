@@ -6,7 +6,7 @@
 # 显存需求小；瓶颈是图像 IO（CXR 全量约 20 万张 PNG）。故不必占 gpus48。
 #
 # 经 --export 注入：
-#   DS      : 数据集名（fitzpatrick / ham10000 / mimic / chexpert / papila）
+#   DS      : 数据集名（fitzpatrick / ham10000 / mimic / chexpert）
 #   BATCH   : 可选，特征抽取 batch（缺省 128）
 #   WORKERS : 可选，DataLoader workers（缺省 8）
 #

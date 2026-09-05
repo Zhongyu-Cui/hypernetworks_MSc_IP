@@ -18,7 +18,7 @@
 #   ERM idx2 (lr1e-04_wd1e-04) / HyperHead idx3 (lr1e-04_wd1e-03)
 #   HyperFusion idx5 (lr3e-04_wd1e-03) / HyperAdapt idx4 (lr3e-04_wd1e-04, bs128 等-batch)
 #
-# 数据集/方法差异由 sbatch 命令行 + --export 注入（同 c_search_papila_cv.sh 约定）：
+# 数据集/方法差异由 sbatch 命令行 + --export 注入：
 #   --partition=<gpus24|gpus48>   HyperAdapt bs128 用 gpus48 等-batch，余 gpus24
 #   --job-name / --output         作业名 / 日志路径
 #   --export=ALL,PY_SCRIPT=<abs.py>,CONFIG_INDEX=<0-5>[,BATCH=<n>][,SWAD=1][,FREEZE=1]

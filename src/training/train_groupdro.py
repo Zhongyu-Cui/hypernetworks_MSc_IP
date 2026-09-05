@@ -26,9 +26,11 @@ GroupDRO 基线通用训练入口（MIMIC / CheXpert / Fitzpatrick）
 运行（复用各库既有的 CV 搜索 array 脚本，接口一致 `--config_index/--seed/--cv/--fold`）：
     sbatch --partition=gpus24 --job-name=mimic_gdro_cvsearch \
       --output=logs/mimic_gdro_cvsearch.%N.%A_%a.log \
-      --export=ALL,PY_SCRIPT=src/training/train_groupdro.py,DATASET=mimic \
+      --export=ALL,PY_SCRIPT=src/training/train_groupdro.py,GDRO_DATASET=mimic \
       slurm/c2_mimic_cv_search.sh
-（各 array 脚本用 `$PY_SCRIPT` 调用本文件，数据集经 `--dataset` 传入——见 slurm 脚本的 EXTRA_ARGS）
+⚠️ 数据集必须经环境变量 **`GDRO_DATASET`** 传入（不是 `DATASET`）：array 脚本以固定的
+`--config_index/--seed/--cv/--fold` 调用 `$PY_SCRIPT`，没有位置塞 `--dataset`，故本文件的
+`--dataset` 缺省值读该环境变量（见 parse_args）。直接命令行运行时用 `--dataset` 亦可。
 """
 
 import argparse

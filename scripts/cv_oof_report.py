@@ -9,7 +9,7 @@ CV-OOF 池化评估 / worst-group 显著性报告器（方案 S2，5 数据集�
 一次，从未参与选择 → 三重无泄漏）。少数子群评估 n 放大约 5×，抬起单-split 的噪声地板。
 
 **选定 config 来源**：`--config-json`（`select_config_cv.py --write-json` 的输出），或 `--config
-method=tag` 显式覆盖。swad/roc 复用 erm 的选定 config。
+method=tag` 显式覆盖。swad 复用 erm 的选定 config。
 
 **口径注脚**：早停=Overall AUC、config 选择=折均 marginal-worst、报告=canonical-worst on pooled-OOF。
 
@@ -18,7 +18,7 @@ method=tag` 显式覆盖。swad/roc 复用 erm 的选定 config。
   python scripts/cv_oof_report.py --dataset ham10000 --config-json outputs/ham10000/cv5/selected_configs.json
   # 或显式指定（如对账路线 A 旧单-split 配置）
   python scripts/cv_oof_report.py --dataset ham10000 \
-      --config erm=lr1e-04_wd1e-04 swad=lr1e-04_wd1e-04 roc=lr1e-04_wd1e-04 \
+      --config erm=lr1e-04_wd1e-04 swad=lr1e-04_wd1e-04 \
                hyperhead=lr1e-04_wd1e-03 hyperfusion=lr3e-04_wd1e-03 hyperadapt=lr3e-04_wd1e-04
 """
 
@@ -48,9 +48,9 @@ FOLD_SEEDS = (42, 43, 44, 45, 46)   # fold k ↔ seed 42+k（CV 搜索约定）
 
 # `hyperadapt_swad` = 实验 G（HN×SWAD 融合）的融合臂，**追加在末尾**使既有方法顺序/行序不变；
 # 仅在 selected_configs.json 含其 key 且预测存在时才被载入（available_methods 会跳过缺失者）。
-METHOD_ORDER = ("erm", "swad", "roc", "groupdro",
+METHOD_ORDER = ("erm", "swad", "groupdro",
                 "hyperhead", "hyperfusion", "hyperadapt", "hyperadapt_swad")
-METHOD_LABEL = {"erm": "ERM", "swad": "SWAD", "roc": "ROC", "groupdro": "GroupDRO",
+METHOD_LABEL = {"erm": "ERM", "swad": "SWAD", "groupdro": "GroupDRO",
                 "hyperhead": "HyperHead", "hyperfusion": "HyperFusion", "hyperadapt": "HyperAdapt",
                 "hyperadapt_swad": "HyperAdapt+SWAD"}
 # ⚠️ `HN` 定义的是**已冻结主矩阵**里「HN vs ERM」的对比集（D1/D3/D4 逐 HN 出表），
@@ -58,9 +58,10 @@ METHOD_LABEL = {"erm": "ERM", "swad": "SWAD", "roc": "ROC", "groupdro": "GroupDR
 HN = ("hyperhead", "hyperfusion", "hyperadapt")
 # `groupdro` 是**训练时用子群标签**的基线（Sagawa ICLR 2020），加入基线列后 HN 会额外与它对比——
 # 这正是它存在的意义：把「用属性 vs 不用属性」从「HN vs 全属性盲基线」的混淆对比里解耦出来。
-BASE = ("erm", "swad", "roc", "groupdro")
+BASE = ("erm", "swad", "groupdro")
 # ROC 落已调整概率，余方法落 logits（决定 to_prob 是否先 sigmoid）
-SCORE_IS_PROB = {m: (m == "roc") for m in METHOD_ORDER}
+# 所有保留方法输出的都是 logit（ROC 分数后处理臂已随报告范围移除）
+SCORE_IS_PROB = {m: False for m in METHOD_ORDER}
 
 
 def _ham_age_filter(attrs: dict[str, np.ndarray]) -> np.ndarray:
