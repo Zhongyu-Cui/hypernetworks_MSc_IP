@@ -3,7 +3,7 @@ Train ResNet18-HyperFusion on MIMIC-CXR (No Finding, sex/race/age-conditioned)
 ==============================================================================
 仅在 backbone 的 layer4[0].downsample 1x1 卷积处接由 sex/race/age 驱动的 HyperFusion 超网络
 （ResNet18HyperFusion，MIP additive + E_L2 投影，初始 Δθ≈0 起步等价 baseline）。HyperFusion 是
-「单点、深层」注入（对齐 Ortiz et al. ICLR 2024），与 HyperHead（只改 fc）、HyperAdapt（每层低秩）
+「单点、深层」注入（对齐 Duenias et al. 2025, Medical Image Analysis 102:103503），与 HyperHead（只改 fc）、HyperAdapt（每层低秩）
 构成注入深度对照；单点注入显存接近 baseline。
 
 **比较协议改造（A0.4）**：训练循环统一走 harness.run_training；本脚本保留 MIMIC 特有的 CXR

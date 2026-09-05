@@ -340,6 +340,151 @@ class ResNet18HyperHeadAge(nn.Module):
         return logits
 
 
+# ============================================================
+# HyperNetwork (双属性版): 由 sex + age 生成分类头 (fc) 的权重与偏置
+# ============================================================
+class SexAgeHyperHeadNet(nn.Module):
+    """
+    AgeHyperHeadNet 的**双属性**版：用 sex (2 类) + age_group (HAM10000: 4 有效组) 两个敏感
+    属性生成主干分类头的逐样本参数。结构与 HyperHeadNet / AgeHyperHeadNet 对齐 (embedding
+    拼接 → 小 MLP → 展平 fc 权重+偏置、末层近零初始化)，仅条件向量由「单一 age embedding」
+    扩为「sex + age 两 embedding 拼接」。
+
+    为什么需要双属性版：HAM 的 worst-group 评估口径是 Sex / Age / Sex×Age 三套分组，而
+    age-only 臂从未拿到 sex——本类补齐条件输入为评估分组变量全集，构成对称性对照。
+
+    ⚠️ age_group==-1 (0-20 排除组) 不是合法 embedding 索引，训练/评估前须在数据侧过滤。
+
+    Args:
+        in_dim    : 主干分类头输入维度 (ResNet-18 = 512)。
+        out_dim   : 主干分类头输出维度 (malignant 二分类 = 1)。
+        num_sex   : sex 类别数 (HAM: 2)。
+        num_age   : age_group 有效类别数 (HAM: 4)。
+        sex_embed : sex embedding 维度。
+        age_embed : age embedding 维度。
+        hidden_dim: HyperNet 内部 MLP 隐藏层维度。
+        init_std  : 末层权重初始尺度 (近零起步，使初始 logit≈0、各样本几乎一致)。
+    """
+
+    def __init__(
+        self,
+        in_dim: int = 512,
+        out_dim: int = 1,
+        num_sex: int = 2,
+        num_age: int = 4,
+        sex_embed: int = 4,
+        age_embed: int = 4,
+        hidden_dim: int = 64,
+        init_std: float = 1e-3,
+    ) -> None:
+        super().__init__()
+        self.in_dim = in_dim
+        self.out_dim = out_dim
+        self.init_std = init_std
+
+        self.sex_emb = nn.Embedding(num_sex, sex_embed)
+        self.age_emb = nn.Embedding(num_age, age_embed)
+
+        weight_numel = in_dim * out_dim   # 展平后的 fc 权重元素数 (512*1)
+        bias_numel = out_dim              # fc 偏置元素数 (1)
+        self.mlp = nn.Sequential(
+            nn.Linear(sex_embed + age_embed, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_dim, weight_numel + bias_numel),
+        )
+        self._init_weights()
+
+    def _init_weights(self) -> None:
+        """末层近零 + 零偏置：初期生成头≈0、logit≈0、各样本几乎一致 (与 AgeHyperHeadNet 同理)。"""
+        nn.init.normal_(self.mlp[-1].weight, mean=0.0, std=self.init_std)
+        nn.init.zeros_(self.mlp[-1].bias)
+
+    def forward(
+        self, sex: torch.Tensor, age_group: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """sex: [B] long (0/1)、age_group: [B] long (0-3) → (weight [B, out_dim, in_dim], bias [B, out_dim])。"""
+        cond = torch.cat([self.sex_emb(sex), self.age_emb(age_group)], dim=-1)  # [B, sex+age]
+        out = self.mlp(cond)                   # [B, in_dim*out_dim + out_dim]
+        weight = out[:, : self.in_dim * self.out_dim].view(-1, self.out_dim, self.in_dim)
+        bias = out[:, self.in_dim * self.out_dim :]
+        return weight, bias
+
+
+# ============================================================
+# ResNet-18 + HyperHead for HAM10000 (sex + age 双属性，对称性对照臂)
+# ============================================================
+class ResNet18HyperHeadSexAge(nn.Module):
+    """
+    HAM10000 版 HyperHead 的**双属性 (sex + age_group)** 变体: backbone 与 baseline 完全一致
+    (ImageNet 预训练 torchvision ResNet-18, fc→Identity, 512 维特征)，分类头由
+    SexAgeHyperHeadNet 依据 (sex, age_group) 逐样本生成。与 ResNet18HyperHeadAge 的唯一差异
+    是条件通路多一条 sex embedding。
+
+    动机: age-only 臂的条件化口径与 worst-group 评估口径 (Sex / Age / Sex×Age) 不对称,
+    本臂把条件输入补齐为评估分组变量全集 (method 名 hyperhead_sexage)。
+
+    forward 签名 (image, sex, age_group)。⚠️ 仅接受 age_group∈{0..3}; -1 须在数据侧先过滤。
+
+    Args:
+        num_classes : 分类头输出维度 (malignant 二分类 → 1)。
+        num_sex     : sex 类别数 (HAM: 2)。
+        num_age     : age_group 有效类别数 (HAM: 4)。
+        sex_embed   : sex embedding 维度。
+        age_embed   : age embedding 维度。
+        hyper_hidden: HyperNet 内部 MLP 隐藏层维度。
+        init_std    : 末层近零初始尺度。
+    """
+
+    def __init__(
+        self,
+        num_classes: int = 1,
+        num_sex: int = 2,
+        num_age: int = 4,
+        sex_embed: int = 4,
+        age_embed: int = 4,
+        hyper_hidden: int = 64,
+        init_std: float = 1e-3,
+    ) -> None:
+        super().__init__()
+        # backbone 与 baseline / age-only 臂完全一致
+        self.backbone = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
+        self.feat_dim = self.backbone.fc.in_features   # 512
+        self.backbone.fc = nn.Identity()
+
+        # 双属性 HyperNet 取代原 fc
+        self.hyper = SexAgeHyperHeadNet(
+            in_dim=self.feat_dim,
+            out_dim=num_classes,
+            num_sex=num_sex,
+            num_age=num_age,
+            sex_embed=sex_embed,
+            age_embed=age_embed,
+            hidden_dim=hyper_hidden,
+            init_std=init_std,
+        )
+
+    def extract_features(self, image: torch.Tensor) -> torch.Tensor:
+        """只跑 backbone，返回 [B, feat_dim] 特征 (fc 之前)。"""
+        return self.backbone(image)
+
+    def forward(
+        self, image: torch.Tensor, sex: torch.Tensor, age_group: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Args:
+            image    : [B, 3, 224, 224] 皮肤镜 RGB 图像。
+            sex      : [B] long，0=Male / 1=Female。
+            age_group: [B] long，0-3 (4 有效年龄组；-1 须已过滤)。
+
+        Returns:
+            logits: [B, num_classes]。
+        """
+        feat = self.extract_features(image)                # [B, 512]
+        weight, bias = self.hyper(sex, age_group)          # [B, C, 512], [B, C]
+        logits = torch.bmm(weight, feat.unsqueeze(-1)).squeeze(-1) + bias  # [B, C]
+        return logits
+
+
 class SkinHyperHeadNet(nn.Module):
     """
     HyperHeadNet 的单属性版：只用 skin (Fitzpatrick I–VI → 0–5) 一个敏感属性生成主干分类头

@@ -87,6 +87,10 @@ CONTRASTS = (
     # 故进 CONTRASTS 而**不进 HOLM_KEYS**——family 保持实验 G 的 8 个检验不变，
     # 既有 G 结论因此逐位不受影响。
     ("groupdro_vs_erm", "groupdro", "erm"),
+    # OOD v2 偏离 #4 的 HyperHead / HyperFusion 两臂：与 GroupDRO 同一处置——校准同口径纳入
+    # 但**只作描述性报告**，进 CONTRASTS 而不进 HOLM_KEYS，故实验 G 的 8 检验 family 逐位不变。
+    ("hyperhead_vs_erm", "hyperhead", "erm"),
+    ("hyperfusion_vs_erm", "hyperfusion", "erm"),
 )
 INTERACTION = "interaction_dint"
 # Holm family 只含「3 个 vs ERM + 交互项」（与 AUC 主分析的 family 构造精神一致）

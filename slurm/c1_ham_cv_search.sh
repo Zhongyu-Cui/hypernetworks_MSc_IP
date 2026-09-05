@@ -24,6 +24,10 @@
 #     PY_SCRIPT : HAM 训练脚本绝对路径（train_ham10000_*.py，均支持 --cv/--fold/--config_index）
 #     BATCH     : 可选，覆盖 config 的 batch_size（HyperAdapt 等-batch 传 128）
 #     SWAD      : 可选，=1 时加 --swad（仅 ERM 用，逐折派生 SWAD 基线）
+#     COND      : 可选，=sex_age 时加 --cond sex_age（**双属性对照臂**：三个 HAM HN 脚本把条件
+#                 输入由 age-only 补齐为 sex+age，method 记为 <method>_sexage，与 age-only 臂
+#                 产物分开存放。动机：worst-group 评估口径是 Sex/Age/Sex×Age，而 age-only 臂
+#                 从未拿到 sex，条件化与评估口径不对称。缺省=age，历史行为不变）
 #
 # 示例（HAM ERM 全-CV 搜索 + 逐折 SWAD 派生）：
 #   sbatch --partition=gpus24 --job-name=ham_erm_cvsearch \
@@ -50,7 +54,7 @@ CONFIG_INDEX=$((SLURM_ARRAY_TASK_ID % 6))  # 0–5：超参网格 config
 FOLD=$((SLURM_ARRAY_TASK_ID / 6))          # 0–4：折号
 SEED=$((42 + FOLD))                        # fold↔seed 一一映射，避免 run_id 覆盖
 
-echo "C1_HAM_CV_SEARCH  PY_SCRIPT=$PY_SCRIPT  config_index=$CONFIG_INDEX  fold=$FOLD  seed=$SEED  cv=$CV  BATCH=${BATCH:-config}  SWAD=${SWAD:-0}"
+echo "C1_HAM_CV_SEARCH  PY_SCRIPT=$PY_SCRIPT  config_index=$CONFIG_INDEX  fold=$FOLD  seed=$SEED  cv=$CV  BATCH=${BATCH:-config}  SWAD=${SWAD:-0}  COND=${COND:-age}"
 
 python "$PY_SCRIPT" \
     --config_index "$CONFIG_INDEX" \
@@ -58,4 +62,5 @@ python "$PY_SCRIPT" \
     --cv "$CV" \
     --fold "$FOLD" \
     ${BATCH:+--batch_size "$BATCH"} \
-    ${SWAD:+--swad}
+    ${SWAD:+--swad} \
+    ${COND:+--cond "$COND"}

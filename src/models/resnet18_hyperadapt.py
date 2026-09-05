@@ -45,6 +45,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torchvision.models import ResNet18_Weights, resnet18
 
+from src.models.soft_attr_embedding import (
+    SoftAgeEmbedding,
+    SoftPatientEmbedding,
+    SoftSexAgeEmbedding,
+    SoftSkinEmbedding,
+)
+
 
 # ============================================================
 # Functional helpers: per-sample adapted conv / linear
@@ -235,6 +242,51 @@ class AgeEmbedding(nn.Module):
     def forward(self, age_group: torch.Tensor) -> torch.Tensor:
         """age_group: [B] (long, 0–3) -> patient profile [B, out_dim]。"""
         return self.fuse(self.age_embed(age_group))         # [B, out_dim]
+
+
+class SexAgeEmbedding(nn.Module):
+    """
+    HAM10000 的**双属性**条件通路: sex (2 类) + age_group (4 有效组) 各自 nn.Embedding 编码后
+    拼接, 经与 PatientEmbedding / AgeEmbedding 同款的两层 fuse MLP 投到 profile vector。
+    结构 = PatientEmbedding 去掉 race 通路 (输入 3*dim → 2*dim), 输出维度 out_dim 不变,
+    因此可直接替换 ResNet18HyperAdapt 的 self.patient_embed 而复用全部 HyperAdapt 机制。
+
+    **为什么需要这个双属性版**: 现有 HAM HN 三臂 (Head/Fusion/Adapt) 只条件化 age, 而
+    worst-group 评估口径是 Sex / Age / Sex×Age 三套分组 (见 utils/ham10000_fairness.py)
+    ——条件化口径与评估口径不对称。本类提供「条件化 = 评估分组变量全集」的对称性对照臂,
+    与 age-only 臂的唯一差异就是条件通路多了 sex embedding (单变量对照)。
+
+    ⚠️ age_group==-1 (0-20 排除组) 不是合法 embedding 索引, 训练/评估前须在数据侧过滤
+       age_group>=0 (与 age-only 臂用同一 _filter_age_valid, 保证两臂样本集逐样本可比)。
+
+    Args:
+        num_sex      : sex 类别数 (HAM: Male/Female = 2)。
+        num_age      : age_group 有效类别数 (HAM: 4)。
+        cat_embed_dim: 每个属性 embedding 的维度 (与 PatientEmbedding 同为 16)。
+        out_dim      : profile vector 维度 (须与模型 patient_embed_dim 一致)。
+    """
+
+    def __init__(
+        self,
+        num_sex: int = 2,
+        num_age: int = 4,
+        cat_embed_dim: int = 16,
+        out_dim: int = 128,
+    ) -> None:
+        super().__init__()
+        self.sex_embed = nn.Embedding(num_sex, cat_embed_dim)
+        self.age_embed = nn.Embedding(num_age, cat_embed_dim)
+        # fuse 结构与 PatientEmbedding 对齐 (双属性: 输入维度 = 2 * cat_embed_dim)
+        self.fuse = nn.Sequential(
+            nn.Linear(2 * cat_embed_dim, out_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(out_dim, out_dim),
+        )
+
+    def forward(self, sex: torch.Tensor, age_group: torch.Tensor) -> torch.Tensor:
+        """sex: [B] (long, 0/1)、age_group: [B] (long, 0-3) -> patient profile [B, out_dim]。"""
+        cond = torch.cat([self.sex_embed(sex), self.age_embed(age_group)], dim=-1)
+        return self.fuse(cond)                              # [B, out_dim]
 
 
 # ============================================================
@@ -735,6 +787,206 @@ class ResNet18HyperAdaptAge(ResNet18HyperAdapt):
 
 
 # ============================================================
+# ResNet-18 + HyperAdapt for HAM10000 (sex + age 双属性，对称性对照臂)
+# ============================================================
+class ResNet18HyperAdaptSexAge(ResNet18HyperAdapt):
+    """
+    HAM10000 版 HyperAdapt 的**双属性 (sex + age_group)** 变体: 与 ResNet18HyperAdaptAge 的
+    唯一差异是条件通路由 AgeEmbedding 换成 SexAgeEmbedding, HyperAdapt 机制 (每 conv 的
+    channel-wise 乘性调制 + fc 加性低秩更新 + Δθ≈0 初始化 + 预训练 backbone) 完全复用父类。
+
+    动机: age-only 三臂的条件化口径 (仅 age) 与 worst-group 评估口径 (Sex / Age / Sex×Age)
+    不对称——sex 轴与交叉格上的最差子群, 模型从未拿到对应属性。本臂把条件输入补齐为评估分组
+    变量全集, 作为对称性对照 (method 名 hyperadapt_sexage, 与 age-only 臂产物分开存放)。
+
+    forward 签名 (image, sex, age_group)——父类 forward 已泛化为 (image, *attrs), 按位置
+    转交 self.patient_embed(sex, age_group), 故无需覆盖 forward。
+
+    ⚠️ 仅接受 age_group∈{0..3}; age_group==-1 须在数据侧先过滤 (训练脚本负责)。
+
+    Args:
+        num_classes      : 分类头输出维度 (malignant 二分类 → 1)。
+        num_sex          : sex 类别数 (HAM: 2)。
+        num_age          : age_group 有效类别数 (HAM: 4)。
+        patient_embed_dim: profile vector 维度 (须与 SexAgeEmbedding.out_dim 一致)。
+        rank             : 低秩分解的秩 k。
+        pretrained       : 是否载入 ImageNet 预训练 backbone (与 baseline 一致, 默认 True)。
+        freeze_backbone  : 是否冻结特征提取 backbone (只训超网络生成器 + 任务头 fc)。
+    """
+
+    def __init__(
+        self,
+        num_classes: int = 1,
+        num_sex: int = 2,
+        num_age: int = 4,
+        patient_embed_dim: int = 128,
+        rank: int = 4,
+        pretrained: bool = True,
+        freeze_backbone: bool = False,
+    ) -> None:
+        # 先按父类构建完整 HyperAdapt (含预训练载入 / 冻结)，随后替换条件通路
+        super().__init__(
+            num_classes=num_classes,
+            patient_embed_dim=patient_embed_dim,
+            rank=rank,
+            pretrained=pretrained,
+            freeze_backbone=freeze_backbone,
+        )
+        # 替换条件通路: 三属性 (sex/race/age) → 双属性 (sex/age)，输出维度不变
+        self.patient_embed = SexAgeEmbedding(
+            num_sex=num_sex, num_age=num_age, cat_embed_dim=16, out_dim=patient_embed_dim,
+        )
+
+
+# ============================================================
+# ResNet-18 + HyperAdapt，条件输入为**属性概率**（Predicted-Attribute 线，实验 P）
+# ============================================================
+# 方案见 docs/predicted_attribute_hyperadapt_plan.md。与上面三个 GT 变体的唯一差异是条件通路
+# 换成 soft_attr_embedding 的期望嵌入版（e = p̂ᵀE）：条件输入由属性索引 [B] 变为属性概率 [B, C]。
+# p̂ 为 one-hot 时与 GT 版逐位等价，且参数命名一致 ⇒ 两版 state_dict 可互 load。
+
+
+class ResNet18HyperAdaptSoftSkin(ResNet18HyperAdapt):
+    """
+    Fitzpatrick17k 的 **pred-attr** HyperAdapt：forward 签名 (image, skin_prob)，
+    其中 skin_prob 为子群分类器 g 输出的 [B, 6] softmax（训练与测试两阶段都用它）。
+
+    与 ResNet18HyperAdaptSkin 的唯一差异是 self.patient_embed 换成 SoftSkinEmbedding；
+    A_gen / B_gen / 逐样本卷积 / fc 低秩更新 / Δθ≈0 初始化全部复用父类。
+
+    Args:
+        num_classes      : 分类头输出维度（malignant 二分类 → 1）。
+        num_skin         : 肤色类别数（Fitzpatrick I–VI = 6）。
+        patient_embed_dim: profile vector 维度。
+        rank             : 低秩分解的秩 k。
+        pretrained       : 是否载入 ImageNet 预训练 backbone。
+        freeze_backbone  : 是否冻结特征提取 backbone。
+    """
+
+    def __init__(
+        self,
+        num_classes: int = 1,
+        num_skin: int = 6,
+        patient_embed_dim: int = 128,
+        rank: int = 4,
+        pretrained: bool = True,
+        freeze_backbone: bool = False,
+    ) -> None:
+        super().__init__(
+            num_classes=num_classes,
+            patient_embed_dim=patient_embed_dim,
+            rank=rank,
+            pretrained=pretrained,
+            freeze_backbone=freeze_backbone,
+        )
+        self.patient_embed = SoftSkinEmbedding(
+            num_skin=num_skin, cat_embed_dim=16, out_dim=patient_embed_dim,
+        )
+
+
+class ResNet18HyperAdaptSoftAge(ResNet18HyperAdapt):
+    """
+    HAM10000 / PAPILA 的 **pred-attr** HyperAdapt：forward 签名 (image, age_prob)，
+    age_prob 为 g 输出的 [B, num_age] softmax。其余同 ResNet18HyperAdaptAge。
+
+    Args:
+        num_classes / num_age / patient_embed_dim / rank / pretrained / freeze_backbone:
+            见 ResNet18HyperAdaptAge。
+    """
+
+    def __init__(
+        self,
+        num_classes: int = 1,
+        num_age: int = 4,
+        patient_embed_dim: int = 128,
+        rank: int = 4,
+        pretrained: bool = True,
+        freeze_backbone: bool = False,
+    ) -> None:
+        super().__init__(
+            num_classes=num_classes,
+            patient_embed_dim=patient_embed_dim,
+            rank=rank,
+            pretrained=pretrained,
+            freeze_backbone=freeze_backbone,
+        )
+        self.patient_embed = SoftAgeEmbedding(
+            num_age=num_age, cat_embed_dim=16, out_dim=patient_embed_dim,
+        )
+
+
+class ResNet18HyperAdaptSoftSexAge(ResNet18HyperAdapt):
+    """
+    HAM10000 **双属性 pred-attr** HyperAdapt（实验 P 的 sex+age 条件化版）：forward 签名
+    (image, sex_prob, age_prob)，两份 softmax 均由子群分类器 g 给出（训练与测试两阶段都用 p̂）。
+
+    与 GT 版 `ResNet18HyperAdaptSexAge` 的唯一差异是条件通路换成 SoftSexAgeEmbedding
+    （期望嵌入 e = p̂ᵀE），参数命名一致 ⇒ 两版 state_dict 可互 load，p̂ 为 one-hot 时逐位等价。
+    与 age-only pred 版 `ResNet18HyperAdaptSoftAge` 的唯一差异是条件输入多了 sex 概率，
+    使实验 P 的条件化口径与 worst-group 评估口径（Sex / Age / Sex×Age）对齐。
+
+    Args:
+        num_classes / num_sex / num_age / patient_embed_dim / rank / pretrained /
+        freeze_backbone: 见 ResNet18HyperAdaptSexAge。
+    """
+
+    def __init__(
+        self,
+        num_classes: int = 1,
+        num_sex: int = 2,
+        num_age: int = 4,
+        patient_embed_dim: int = 128,
+        rank: int = 4,
+        pretrained: bool = True,
+        freeze_backbone: bool = False,
+    ) -> None:
+        super().__init__(
+            num_classes=num_classes,
+            patient_embed_dim=patient_embed_dim,
+            rank=rank,
+            pretrained=pretrained,
+            freeze_backbone=freeze_backbone,
+        )
+        self.patient_embed = SoftSexAgeEmbedding(
+            num_sex=num_sex, num_age=num_age, cat_embed_dim=16, out_dim=patient_embed_dim,
+        )
+
+
+class ResNet18HyperAdaptSoftPatient(ResNet18HyperAdapt):
+    """
+    MIMIC / CheXpert 的 **pred-attr** HyperAdapt：forward 签名
+    (image, sex_prob, race_prob, age_prob)，三轴各一份 softmax。其余同 ResNet18HyperAdapt。
+
+    Args:
+        num_classes / num_sex / num_race / num_age / patient_embed_dim / rank /
+        pretrained / freeze_backbone: 见 ResNet18HyperAdapt 与 PatientEmbedding。
+    """
+
+    def __init__(
+        self,
+        num_classes: int = 1,
+        num_sex: int = 2,
+        num_race: int = 2,
+        num_age: int = 2,
+        patient_embed_dim: int = 128,
+        rank: int = 4,
+        pretrained: bool = True,
+        freeze_backbone: bool = False,
+    ) -> None:
+        super().__init__(
+            num_classes=num_classes,
+            patient_embed_dim=patient_embed_dim,
+            rank=rank,
+            pretrained=pretrained,
+            freeze_backbone=freeze_backbone,
+        )
+        self.patient_embed = SoftPatientEmbedding(
+            num_sex=num_sex, num_race=num_race, num_age=num_age,
+            cat_embed_dim=16, out_dim=patient_embed_dim,
+        )
+
+
+# ============================================================
 # 结构自检
 # ============================================================
 if __name__ == "__main__":
@@ -784,3 +1036,20 @@ if __name__ == "__main__":
     print(f"Total params : {n_total_a:>12,} (backbone {n_backbone_a:,} + adapter {n_adapter_a:,})")
     age_logits.sum().backward()
     print("Age variant backward pass OK.")
+
+    # ---- pred-attr (soft) 变体自检：one-hot 概率须与 GT 索引版给出同样的 logits ----
+    soft_model = ResNet18HyperAdaptSoftSkin(num_classes=1, num_skin=6, rank=4, pretrained=False)
+    soft_model.eval()
+    # 两版参数名一致，直接把 GT 版权重整体搬过来，构成严格可比的等价性检验
+    soft_model.load_state_dict(skin_model.state_dict())
+    skin_onehot = torch.nn.functional.one_hot(skin, num_classes=6).float()
+    with torch.no_grad():
+        delta = (soft_model(image, skin_onehot) - skin_model(image, skin)).abs().max().item()
+    print(f"\n[Fitz soft   ] one-hot 概率 vs GT 索引  max|Δlogit| = {delta:.3e}")
+    assert delta < 1e-5, "soft 版在 one-hot 输入下未复现 GT 版 logits"
+    # 软输入（非 one-hot）前向 + 反向
+    soft_prob = torch.softmax(torch.randn(batch_size, 6), dim=-1)
+    soft_logits = soft_model(image, soft_prob)
+    print(f"[Fitz soft   ] Logits shape : {tuple(soft_logits.shape)}")
+    soft_logits.sum().backward()
+    print("Soft-skin variant backward pass OK.")

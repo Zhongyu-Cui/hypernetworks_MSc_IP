@@ -64,12 +64,17 @@ DIRECTIONS = {
             "title": "CheXpert → MIMIC"},
 }
 # 追加实验 G 的融合臂（HyperAdapt+SWAD）与 GroupDRO 基线——追加不插入，既有方法顺序/配色不变。
-METHODS = ("erm", "swad", "hyperadapt", "hyperadapt_swad", "groupdro")
+# OOD v2 偏离 #4：再追加 HyperHead / HyperFusion 两臂（恢复条件化深度轴）——同样是**追加不插入**，
+# 既有方法顺序/配色逐位不变。
+METHODS = ("erm", "swad", "hyperadapt", "hyperadapt_swad", "groupdro",
+           "hyperhead", "hyperfusion")
 BASE = "erm"
 COLORS = {"erm": "#2a78d6", "hyperadapt": "#eb6834", "swad": "#1baf7a",
-          "hyperadapt_swad": "#8b53c9", "groupdro": "#c2185b"}
+          "hyperadapt_swad": "#8b53c9", "groupdro": "#c2185b",
+          "hyperhead": "#d4a017", "hyperfusion": "#00838f"}
 LABELS = {"erm": "ERM", "swad": "SWAD", "hyperadapt": "HyperAdapt",
-          "hyperadapt_swad": "HyperAdapt+SWAD", "groupdro": "GroupDRO"}
+          "hyperadapt_swad": "HyperAdapt+SWAD", "groupdro": "GroupDRO",
+          "hyperhead": "HyperHead", "hyperfusion": "HyperFusion"}
 INK, MUTED = "#0b0b0b", "#52514e"
 
 
@@ -190,6 +195,10 @@ def run_direction(direction: str, metric: str, n_boot: int) -> dict | None:
            "n_boot": n_boot, "config": {m: cfg[m] for m in METHODS},
            "point": {m: float(obs[m].mean()) for m in METHODS},
            "per_cell": {m: obs[m].tolist() for m in METHODS},
+           # 逐方法的 bootstrap 分布（全方法共用同一批重采样索引）⇒ **任意一对**方法的配对差
+           # 都是 B[m1] − B[m2]，无须重跑 bootstrap。供第 5 章报告预注册的
+           # 「3 HN × 3 baseline = 每方向 9 对比」确认性家族。
+           "boot": {m: B[m].tolist() for m in METHODS},
            "h1_bootstrap": {}, "h2_variance": {}}
     for m in METHODS:
         if m == BASE:

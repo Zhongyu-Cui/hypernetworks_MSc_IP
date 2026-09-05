@@ -8,7 +8,7 @@ shortcut θ_ds = θ_0 + h(γ_p)。其余层 (stem、layer1~3、layer4[0] 主分�
 与 baseline 完全一致, 共享同一份权重。
 
 设计参考 drafts/PreactivResNet18_hyperfusion_MIP.py (UTKFace 原型, 对齐 HyperFusion
-论文 Ortiz et al., ICLR 2024), 但做了三点适配以与 MIMIC baseline 对齐:
+论文 Duenias et al., Medical Image Analysis 102:103503, 2025), 但做了三点适配以与 MIMIC baseline 对齐:
 
   1. Backbone 换成与 baseline 完全一致的 torchvision.models.resnet18 + ImageNet 预训练
      权重 (drafts 里是从零实现的 PreactivResNet18)。本模块直接持有一个完整的 torchvision
@@ -27,7 +27,8 @@ shortcut θ_ds = θ_0 + h(γ_p)。其余层 (stem、layer1~3、layer4[0] 主分�
   - 与 HyperAdapt「每个卷积层都低秩调制」相比, HyperFusion 是「单点、全权重生成」:
     注入点更集中、更深, 用以检验「集中在高层 shortcut 的强注入」对公平性的影响。
 
-MIP 初始化 (Modulated Initialisation Procedure, Ortiz et al. 2024) 保证「起始等价于
+MIP 初始化 (Ortiz et al., ICLR 2024; ⚠ 展开式与完整出处待核实——HyperFusion 原文用的是
+Chang et al. 2019 的方差对齐初始化, 不含 MIP) 保证「起始等价于
 预训练 baseline」:
   - additive 重写: θ_ds = θ_0 + h(γ)
         · θ_0    : backbone 自带的 downsample 卷积权重 (已由 ImageNet 预训练填充, 可学基底)
@@ -124,6 +125,48 @@ class AgeEmbedding(nn.Module):
     def forward(self, age_group: torch.Tensor) -> torch.Tensor:
         """age_group: [B] (long, 0–3) -> patient profile [B, out_dim]。"""
         return self.fuse(self.age_embed(age_group))         # [B, out_dim]
+
+
+class SexAgeEmbedding(nn.Module):
+    """
+    HAM10000 的**双属性**条件通路: sex (2 类) + age_group (4 有效组) 各自 nn.Embedding 编码后
+    拼接, 经与 PatientEmbedding / AgeEmbedding 同款的两层 fuse MLP 投到 patient profile。
+    = PatientEmbedding 去掉 race 通路 (输入 3*dim → 2*dim); 输出维度 out_dim 不变, 可直接
+    替换 ResNet18HyperFusion 的 self.patient_embed。
+
+    为什么需要双属性版: HAM HN 三臂原本只条件化 age, 而 worst-group 评估口径是
+    Sex / Age / Sex×Age——条件化口径与评估口径不对称。本类提供对称性对照臂的条件通路,
+    与 age-only 臂的唯一差异是多一条 sex embedding。
+
+    ⚠️ age_group==-1 (0-20 排除组) 非法索引, 须在数据侧先过滤 (与 age-only 臂同一过滤)。
+
+    Args:
+        num_sex      : sex 类别数 (HAM: 2)。
+        num_age      : age_group 有效类别数 (HAM: 4)。
+        cat_embed_dim: 每个属性 embedding 维度。
+        out_dim      : patient profile 维度 (须与模型 patient_embed_dim 一致)。
+    """
+
+    def __init__(
+        self,
+        num_sex: int = 2,
+        num_age: int = 4,
+        cat_embed_dim: int = 16,
+        out_dim: int = 128,
+    ) -> None:
+        super().__init__()
+        self.sex_embed = nn.Embedding(num_sex, cat_embed_dim)
+        self.age_embed = nn.Embedding(num_age, cat_embed_dim)
+        self.fuse = nn.Sequential(
+            nn.Linear(2 * cat_embed_dim, out_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(out_dim, out_dim),
+        )
+
+    def forward(self, sex: torch.Tensor, age_group: torch.Tensor) -> torch.Tensor:
+        """sex: [B] (long, 0/1)、age_group: [B] (long, 0-3) -> patient profile [B, out_dim]。"""
+        cond = torch.cat([self.sex_embed(sex), self.age_embed(age_group)], dim=-1)
+        return self.fuse(cond)                              # [B, out_dim]
 
 
 class SkinEmbedding(nn.Module):
@@ -500,6 +543,88 @@ class ResNet18HyperFusionAge(ResNet18HyperFusion):
         x = bb.layer3(x)
 
         x = self._hyper_layer4_block0(x, embedding)            # 唯一注入点
+        x = bb.layer4[1](x)
+
+        x = bb.avgpool(x)
+        x = torch.flatten(x, 1)
+        logits = bb.fc(x)
+        return logits
+
+
+class ResNet18HyperFusionSexAge(ResNet18HyperFusion):
+    """
+    HAM10000 版 HyperFusion 的**双属性 (sex + age_group)** 变体: 与 ResNet18HyperFusionAge 的
+    唯一差异是条件通路由 AgeEmbedding 换成 SexAgeEmbedding, HyperFusion 机制 (仅
+    layer4[0].downsample 1x1 conv 由超网络 MIP additive 逐样本生成 θ_ds=θ_0+Δθ、E_L2 投影、
+    grouped conv、其余层与 baseline 共享) 完全复用父类。
+
+    动机: age-only 臂的条件化口径与 worst-group 评估口径 (Sex / Age / Sex×Age) 不对称,
+    本臂把条件输入补齐为评估分组变量全集 (method 名 hyperfusion_sexage)。
+
+    ⚠️ 仅接受 age_group∈{0..3}; -1 须在数据侧先过滤 (训练脚本负责)。
+
+    Args:
+        num_classes      : 分类头输出维度 (malignant 二分类 → 1)。
+        num_sex          : sex 类别数 (HAM: 2)。
+        num_age          : age_group 有效类别数 (HAM: 4)。
+        patient_embed_dim: patient profile 维度 (须与 SexAgeEmbedding.out_dim 一致)。
+        hyper_hidden     : 超网络 MLP 隐藏层维度。
+        mip_scale        : MIP 输出层小尺度因子。
+        use_l2_norm      : 是否对 patient profile 做 E_L2 投影。
+        pretrained       : 是否载入 ImageNet 预训练 backbone (默认 True)。
+    """
+
+    def __init__(
+        self,
+        num_classes: int = 1,
+        num_sex: int = 2,
+        num_age: int = 4,
+        patient_embed_dim: int = 128,
+        hyper_hidden: int = 64,
+        mip_scale: float = 0.01,
+        use_l2_norm: bool = True,
+        pretrained: bool = True,
+    ) -> None:
+        super().__init__(
+            num_classes=num_classes,
+            patient_embed_dim=patient_embed_dim,
+            hyper_hidden=hyper_hidden,
+            mip_scale=mip_scale,
+            use_l2_norm=use_l2_norm,
+            pretrained=pretrained,
+        )
+        # 替换条件通路: 三属性 → 双属性 (sex/age)，输出维度不变，注入点与 hyper_net 不受影响
+        self.patient_embed = SexAgeEmbedding(
+            num_sex=num_sex, num_age=num_age, cat_embed_dim=16, out_dim=patient_embed_dim,
+        )
+
+    def forward(
+        self, image: torch.Tensor, sex: torch.Tensor, age_group: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        与 ResNet18HyperFusionAge.forward 同构，仅条件向量由 (sex, age) 双属性生成。
+
+        Args:
+            image    : [B, 3, 224, 224] 皮肤镜 RGB 图像。
+            sex      : [B] long，0=Male / 1=Female。
+            age_group: [B] long，0-3 (4 有效年龄组；-1 须已过滤)。
+
+        Returns:
+            logits: [B, num_classes]。
+        """
+        bb = self.backbone
+        embedding = self.patient_embed(sex, age_group)          # [B, embed_dim]
+
+        x = bb.conv1(image)
+        x = bb.bn1(x)
+        x = bb.relu(x)
+        x = bb.maxpool(x)
+
+        x = bb.layer1(x)
+        x = bb.layer2(x)
+        x = bb.layer3(x)
+
+        x = self._hyper_layer4_block0(x, embedding)             # 唯一注入点
         x = bb.layer4[1](x)
 
         x = bb.avgpool(x)

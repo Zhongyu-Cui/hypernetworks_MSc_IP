@@ -11,6 +11,13 @@ Train ResNet18-HyperAdapt on HAM10000 (malignant, age-conditioned)
 ⚠️ 逐样本卷积核显存大：`--batch_size` 覆盖 config（协议要求「重型 HN 显存对照必须等 batch」，
 曾被 b32 OOM 假象坑过；搜索/确认时对齐各方法 batch）。
 
+**双属性对照臂（--cond sex_age）**：`--cond age`（缺省）保持原「只条件化 age」行为不变；
+`--cond sex_age` 把条件通路换成 sex+age（模型类 *SexAge，forward_sex_age），method 记为
+`<method>_sexage`，产物与 age-only 臂分开存放。动机：worst-group 评估口径是 Sex / Age /
+Sex×Age 三套分组，而 age-only 臂从未拿到 sex，条件化口径与评估口径不对称；本臂把条件输入
+补齐为评估分组变量全集，与 age-only 臂构成**唯一差异=条件输入**的单变量对照（样本集、
+age_group>=0 过滤、超参网格、split/seed 规程全部一致）。
+
 运行方式：重型任务，经 sbatch 提交（见 slurm/train_ham10000_hyperadapt.sh）。
 """
 
@@ -23,10 +30,12 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 
 from src.datasets.ham10000_dataset import HAM10000Dataset
-from src.models.resnet18_hyperadapt import ResNet18HyperAdaptAge
+from src.models.resnet18_hyperadapt import ResNet18HyperAdaptAge, ResNet18HyperAdaptSexAge
 from src.training.harness.hparam_grid import get_hparam_config, grid_size
 from src.training.harness.run import seed_everything
-from src.training.harness.train_loop import forward_age, run_training, unpack_sex_age
+from src.training.harness.train_loop import (
+    forward_age, forward_sex_age, run_training, unpack_sex_age,
+)
 from src.utils.ham10000_fairness import print_ham10000_fairness_report
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -36,6 +45,7 @@ OUTPUT_DIR = Path("/vol/biomedic2/bglocker_studproj/zc125/outputs/ham10000")
 DATASET = "ham10000"
 METHOD = "hyperadapt"
 NUM_AGE = 4
+NUM_SEX = 2   # HAM sex: 0=Male / 1=Female（双属性对照臂用）
 
 
 def load_config(path: Path) -> dict:
@@ -68,6 +78,11 @@ def parse_args() -> argparse.Namespace:
                         help="冻结 regime（对齐 HyperAdapt 论文「冻结 backbone、只训 adapter」）：冻结 "
                              "backbone 卷积/BN 仿射参数，梯度只流入超网络生成器 + fc。method 记为 "
                              "hyperadapt_frozen，与全微调结果分开存放，互不覆盖。")
+    parser.add_argument("--cond", type=str, default="age", choices=("age", "sex_age"),
+                        help="条件通路属性集：age=只条件化 age_group（默认，历史臂）；"
+                             "sex_age=同时条件化 sex+age_group（对称性对照臂，method 记为 "
+                             "<method>_sexage，与 age-only 臂产物分开存放）。两者唯一差异就是"
+                             "条件输入，样本集/过滤/评估口径完全一致。")
     return parser.parse_args()
 
 
@@ -160,22 +175,35 @@ def main() -> None:
     hparam = get_hparam_config(args.config_index)
     split_dir, output_dir = resolve_paths(cfg, args.cv, args.fold)
 
+    # 条件通路选择：age-only（历史臂）或 sex+age（对称性对照臂），二者仅差条件输入
+    sex_age = args.cond == "sex_age"
+    build_model = (
+        (lambda: ResNet18HyperAdaptSexAge(
+            num_classes=1, num_sex=NUM_SEX, num_age=NUM_AGE,
+            pretrained=cfg["model"]["pretrained"], freeze_backbone=args.freeze_backbone))
+        if sex_age else
+        (lambda: ResNet18HyperAdaptAge(
+            num_classes=1, num_age=NUM_AGE, pretrained=cfg["model"]["pretrained"],
+            freeze_backbone=args.freeze_backbone))
+    )
+    forward_fn = forward_sex_age if sex_age else forward_age
+
     seed_everything(seed)
-    print(f"Loading HAM10000 (malignant, age-conditioned HyperAdapt)  "
+    print(f"Loading HAM10000 (malignant, {args.cond}-conditioned HyperAdapt)  "
           f"split_dir={split_dir.name}  output_dir={output_dir.name}...")
     train_transform, eval_transform = build_transforms(cfg)
     train_loader, val_loader, test_loader = get_dataloaders(cfg, split_dir, train_transform, eval_transform)
 
-    # 冻结 regime：method 记为 hyperadapt_frozen，与全微调结果分开命名，互不覆盖
-    method = "hyperadapt_frozen" if args.freeze_backbone else METHOD
+    # method 后缀：_sexage（双属性对照臂）与 _frozen（冻结 regime）可叠加，各自与历史产物隔离
+    method = f"{METHOD}_sexage" if sex_age else METHOD
+    if args.freeze_backbone:
+        method = f"{method}_frozen"
 
     run_training(
         dataset=DATASET, method=method, output_dir=output_dir, cfg=cfg, hparam=hparam, seed=seed,
         train_loader=train_loader, val_loader=val_loader, test_loader=test_loader,
-        build_model=lambda: ResNet18HyperAdaptAge(
-            num_classes=1, num_age=NUM_AGE, pretrained=cfg["model"]["pretrained"],
-            freeze_backbone=args.freeze_backbone),
-        unpack_fn=unpack_sex_age, forward_fn=forward_age,
+        build_model=build_model,
+        unpack_fn=unpack_sex_age, forward_fn=forward_fn,
         fairness_report_fn=_fairness_report,
         swad=args.swad,
     )

@@ -36,9 +36,10 @@ from src.datasets.mimic_cxr_dataset import MIMICCXRDataset
 from src.models.resnet18_pretrained import ResNet18Pretrained
 from src.models.resnet18_hyperhead import ResNet18HyperHead
 from src.models.resnet18_hyperfusion import ResNet18HyperFusion
-from src.models.resnet18_hyperadapt import ResNet18HyperAdapt
+from src.models.resnet18_hyperadapt import ResNet18HyperAdapt, ResNet18HyperAdaptSoftPatient
 from src.training.harness.train_loop import (
-    DEVICE, EvalResult, evaluate, forward_image_only, forward_sex_race_age, unpack_sex_race_age,
+    DEVICE, EvalResult, evaluate, forward_image_only, forward_sex_race_age, forward_soft_patient,
+    unpack_sex_race_age, unpack_sex_race_age_soft,
 )
 from src.utils.mimic_fairness import print_mimic_fairness_report
 
@@ -63,6 +64,14 @@ METHOD_REGISTRY: dict[str, tuple[Callable[[], nn.Module], Callable]] = {
     # 实验 G 的融合臂：架构与 hyperadapt 完全相同，只是权重来自 SWAD loss-valley 平均
     # （checkpoint 后缀 _averaged，见 run_ood_cxr_full_target.checkpoint_path）。
     "hyperadapt_swad": (lambda: ResNet18HyperAdapt(num_classes=1, pretrained=False), forward_sex_race_age),
+    # 实验 P 的 pred-attr 臂（docs/predicted_attribute_hyperadapt_plan.md）：条件输入是**概率**而非
+    # 索引，故模型换成期望嵌入版、forward 换成 forward_soft_patient；四个 attr_mode 共用同一架构
+    # （差别只在条件输入如何物化，由 loader 侧决定），故注册为四个同构条目。
+    # ⚠️ 这些方法要求 test_loader 产出 SoftAttrDataset 包装的 8 元组，并给 evaluate_ood 传
+    # `unpack_override=unpack_sex_race_age_soft`（见 run_ood_cxr_pred.py）。
+    **{m: (lambda: ResNet18HyperAdaptSoftPatient(num_classes=1, pretrained=False), forward_soft_patient)
+       for m in ("hyperadapt_pred", "hyperadapt_predhard",
+                 "hyperadapt_predperm", "hyperadapt_predconst")},
 }
 
 
@@ -143,6 +152,7 @@ def evaluate_ood(
     test_loader: DataLoader | None = None,
     report: bool = True,
     forward_override: Callable | None = None,
+    unpack_override: Callable | None = None,
 ) -> OODResult:
     """
     A5.1：加载源 A 训练的模型，在目标 B 的测试集上评估并报告公平性。
@@ -159,6 +169,9 @@ def evaluate_ood(
         forward_override: 可选，替换该方法默认的 forward 回调。用于**属性 knockout 反事实**
             （`run_ood_attr_knockout.py`）——只改「模型看到什么属性」，而 `evaluate` 收集的
             分组键仍来自 unpack_fn 的真实属性，故评估口径不受污染。缺省 None = 原行为。
+        unpack_override : 可选，替换默认的 `unpack_sex_race_age`。实验 P 的 pred-attr 臂需要
+            `unpack_sex_race_age_soft`（loader 多产出三份属性概率）。**分组键仍取真值 sex/race/age**，
+            评估口径不变。缺省 None = 原行为。
 
     Returns:
         OODResult。
@@ -181,7 +194,8 @@ def evaluate_ood(
 
     criterion = nn.BCEWithLogitsLoss()
     # subgroup_auc / 公平性口径：两 CXR 数据集共用 mimic 向量（target 传 mimic/chexpert 皆可）
-    er = evaluate(model, test_loader, criterion, target, unpack_sex_race_age, forward_fn)
+    unpack_fn = unpack_override if unpack_override is not None else unpack_sex_race_age
+    er = evaluate(model, test_loader, criterion, target, unpack_fn, forward_fn)
 
     wc_str = f"{er.wc_auc:.4f}" if er.wc_auc is not None else "N/A"
     print(f"\n{'#' * 70}\n# OOD: {source} 模型 → {target} 测试集  (method={method})\n{'#' * 70}")

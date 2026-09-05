@@ -60,6 +60,12 @@ Attrs = dict[str, torch.Tensor]
 UnpackFn = Callable[[Batch], tuple[torch.Tensor, torch.Tensor, Attrs]]
 ForwardFn = Callable[[nn.Module, torch.Tensor, Attrs], torch.Tensor]
 FairnessReportFn = Callable[[np.ndarray, np.ndarray, dict[str, np.ndarray]], None]
+# **分组属性白名单**：attrs 字典里只有这些键是 subgroup_auc_vector / fairness 模块的合法分组 kwarg。
+# 实验 P（Predicted-Attribute HyperAdapt）会在 attrs 里额外放 `soft_<axis>` 的 [B, C] 概率矩阵作为
+# 超网络的条件输入；它**不是分组属性**（分组永远用真值属性），故 splat 前必须过滤，落盘时改走
+# save_predictions 的 `extra` 通道。见 docs/predicted_attribute_hyperadapt_plan.md §4/§5。
+GROUP_ATTR_KEYS: frozenset[str] = frozenset({"sex", "race", "age", "skin", "a_syn"})
+
 # 可选的**训练目标**替换（默认 None = 普通 BCE 均值）。签名 (logits, labels, attrs) -> 标量 loss，
 # 使需要子群标签的目标（GroupDRO）能拿到 attrs。只作用于训练；val/test 恒用普通 BCE，保证早停、
 # SWAD loss 谷、跨方法 loss 可比性不被目标函数差异污染。
@@ -111,6 +117,17 @@ def forward_age(model: nn.Module, images: torch.Tensor, attrs: Attrs) -> torch.T
     return model(images, attrs["age"].to(images.device, non_blocking=True))
 
 
+def forward_sex_age(model: nn.Module, images: torch.Tensor, attrs: Attrs) -> torch.Tensor:
+    """HAM 双属性 HN（对称性对照臂）：model(image, sex, age)——条件输入补齐为 worst-group
+    评估分组变量全集（Sex / Age / Sex×Age），与 forward_age 的单一 age 通路构成单变量对照。"""
+    d = images.device
+    return model(
+        images,
+        attrs["sex"].to(d, non_blocking=True),
+        attrs["age"].to(d, non_blocking=True),
+    )
+
+
 def forward_sex_race_age(model: nn.Module, images: torch.Tensor, attrs: Attrs) -> torch.Tensor:
     """MIMIC / CheXpert HN：model(image, sex, race, age)。"""
     d = images.device
@@ -127,9 +144,95 @@ def forward_asyn(model: nn.Module, images: torch.Tensor, attrs: Attrs) -> torch.
     return model(images, attrs["a_syn"].to(images.device, non_blocking=True))
 
 
+# ---- 实验 P（Predicted-Attribute）：条件输入是 g 的属性概率，分组属性仍为真值 ----
+def unpack_skin_soft(batch: Batch) -> tuple[torch.Tensor, torch.Tensor, Attrs]:
+    """Fitzpatrick + SoftAttrDataset：loader 返回 (image, label, skin, skin_prob)
+    → attrs={skin(真值,分组用), soft_skin([B,6] 条件输入)}。"""
+    images, labels, skin, skin_prob = batch
+    return images, labels, {"skin": skin, "soft_skin": skin_prob}
+
+
+def unpack_sex_age_soft(batch: Batch) -> tuple[torch.Tensor, torch.Tensor, Attrs]:
+    """HAM / PAPILA + SoftAttrDataset：loader 返回 (image, label, sex, age, age_prob)
+    → attrs={sex, age(真值,分组用), soft_age([B,C] 条件输入)}。"""
+    images, labels, sex, age, age_prob = batch
+    return images, labels, {"sex": sex, "age": age, "soft_age": age_prob}
+
+
+def forward_soft_skin(model: nn.Module, images: torch.Tensor, attrs: Attrs) -> torch.Tensor:
+    """Fitzpatrick pred-attr HN：model(image, skin_prob)。"""
+    return model(images, attrs["soft_skin"].to(images.device, non_blocking=True))
+
+
+def forward_soft_age(model: nn.Module, images: torch.Tensor, attrs: Attrs) -> torch.Tensor:
+    """HAM / PAPILA pred-attr HN：model(image, age_prob)。"""
+    return model(images, attrs["soft_age"].to(images.device, non_blocking=True))
+
+
+def unpack_sex_age_soft_pair(batch: Batch) -> tuple[torch.Tensor, torch.Tensor, Attrs]:
+    """HAM 双属性 pred-attr 臂 + SoftAttrDataset：loader 返回
+    (image, label, sex, age, sex_prob, age_prob)
+    → attrs={sex, age（真值,分组用）, soft_sex, soft_age（条件输入）}。
+    两份概率的顺序须与 SoftAttrDataset 构造时给的矩阵顺序一致（sex, age）。"""
+    images, labels, sex, age, sex_prob, age_prob = batch
+    return images, labels, {
+        "sex": sex, "age": age, "soft_sex": sex_prob, "soft_age": age_prob,
+    }
+
+
+def forward_soft_sex_age(model: nn.Module, images: torch.Tensor, attrs: Attrs) -> torch.Tensor:
+    """HAM 双属性 pred-attr HN：model(image, sex_prob, age_prob)——与 forward_soft_age 的单一
+    age 通路构成「只差是否含 sex 概率」的单变量对照。"""
+    d = images.device
+    return model(
+        images,
+        attrs["soft_sex"].to(d, non_blocking=True),
+        attrs["soft_age"].to(d, non_blocking=True),
+    )
+
+
+def unpack_sex_race_age_soft(batch: Batch) -> tuple[torch.Tensor, torch.Tensor, Attrs]:
+    """MIMIC / CheXpert + SoftAttrDataset：loader 返回
+    (image, label, sex, race, age, sex_prob, race_prob, age_prob)
+    → attrs={sex, race, age（真值,分组用）, soft_sex, soft_race, soft_age（条件输入）}。
+    三份概率的顺序须与 SoftAttrDataset 构造时给的矩阵顺序一致（sex, race, age）。"""
+    images, labels, sex, race, age, sex_prob, race_prob, age_prob = batch
+    return images, labels, {
+        "sex": sex, "race": race, "age": age,
+        "soft_sex": sex_prob, "soft_race": race_prob, "soft_age": age_prob,
+    }
+
+
+def forward_soft_patient(model: nn.Module, images: torch.Tensor, attrs: Attrs) -> torch.Tensor:
+    """MIMIC / CheXpert pred-attr HN：model(image, sex_prob, race_prob, age_prob)。"""
+    d = images.device
+    return model(
+        images,
+        attrs["soft_sex"].to(d, non_blocking=True),
+        attrs["soft_race"].to(d, non_blocking=True),
+        attrs["soft_age"].to(d, non_blocking=True),
+    )
+
+
 # ============================================================
 # 推理 / 评估
 # ============================================================
+def _group_attrs(attrs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    """取 attrs 中的真值分组属性（白名单内的键），供 subgroup_auc / fairness 模块 splat。"""
+    return {k: v for k, v in attrs.items() if k in GROUP_ATTR_KEYS}
+
+
+def _extra_attrs(attrs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    """取 attrs 中的非分组附加列（如实验 P 的 soft_* 条件输入），落盘时走 `extra` 通道。"""
+    return {k: v for k, v in attrs.items() if k not in GROUP_ATTR_KEYS}
+
+
+def _save_eval_predictions(path, er: "EvalResult") -> None:
+    """把一次评估的预测落盘：分组属性进 attrs，其余（soft_* 条件输入）进 extra。"""
+    save_predictions(path, er.labels, er.logits, _group_attrs(er.attrs),
+                     extra=_extra_attrs(er.attrs) or None)
+
+
 @dataclass
 class EvalResult:
     """一次验证/测试集评估的完整结果。"""
@@ -242,7 +345,8 @@ def evaluate(
     attrs_np = {k: np.concatenate(v) for k, v in attrs_all.items()}
 
     overall = float(roc_auc_score(labels_np, logits_np))
-    vec = subgroup_auc_vector(dataset, labels_np, logits_np, **attrs_np)
+    # 只把白名单内的**真值分组属性**splat 进子群 AUC；条件输入用的 soft_* 概率矩阵在此被排除
+    vec = subgroup_auc_vector(dataset, labels_np, logits_np, **_group_attrs(attrs_np))
     wc = vector_worst_case(vec)
 
     return EvalResult(
@@ -358,7 +462,7 @@ def _finalize_swad(
     fairness_report_fn(er_test.labels, er_test.logits, er_test.attrs)
     # SWAD 是单一平均模型（无 overall/worstcase 之分）：预测存到 "overall" 槽（唯一 selection）
     swad_pred = default_prediction_path(output_dir, swad_method, config_tag, seed, "overall")
-    save_predictions(swad_pred, er_test.labels, er_test.logits, er_test.attrs)
+    _save_eval_predictions(swad_pred, er_test)
     print(f"已落盘 SWAD test 预测: {swad_pred.name}")
 
     return {
@@ -577,8 +681,8 @@ def run_training(
                                        unpack_fn, forward_fn, fairness_report_fn, label="Worst-case AUC selection")
     pred_overall = default_prediction_path(output_dir, method, hparam.tag, seed, "overall")
     pred_worstcase = default_prediction_path(output_dir, method, hparam.tag, seed, "worstcase")
-    save_predictions(pred_overall, er_overall.labels, er_overall.logits, er_overall.attrs)
-    save_predictions(pred_worstcase, er_worstcase.labels, er_worstcase.logits, er_worstcase.attrs)
+    _save_eval_predictions(pred_overall, er_overall)
+    _save_eval_predictions(pred_worstcase, er_worstcase)
     print(f"已落盘 test 预测: {pred_overall.name} / {pred_worstcase.name}")
 
     # ROC 后处理（A4 / C*.8）需 val 预测定 deprived 子群与选 margin θ：用 overall-selection
@@ -587,7 +691,7 @@ def run_training(
                                          unpack_fn, forward_fn, fairness_report_fn,
                                          label="[val] Overall AUC selection")
     pred_val_overall = val_prediction_path(output_dir, method, hparam.tag, seed)
-    save_predictions(pred_val_overall, er_val_overall.labels, er_val_overall.logits, er_val_overall.attrs)
+    _save_eval_predictions(pred_val_overall, er_val_overall)
     print(f"已落盘 val 预测（供 ROC）: {pred_val_overall.name}")
 
     summary = {

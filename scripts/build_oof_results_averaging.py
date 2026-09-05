@@ -53,8 +53,12 @@ SPLITS = Path("/vol/biomedic2/bglocker_studproj/zc125/code/hypernetworks_MSc_IP/
 FOLD_SEEDS = (42, 43, 44, 45, 46)                 # fold k ↔ seed 42+k（既有 CV 布局）
 # 末尾追加实验 G（HN×SWAD 融合）的融合臂——**追加而非插入**，既有方法的出现顺序不变。
 # 该方法仅在 selected_configs.json 含其 key 且预测存在时才被载入，否则静默跳过（见 run_spec）。
+# 再末尾追加 HAM **双属性对照臂**（<hn>_sexage：条件输入由 age-only 补齐为 sex+age，见
+# src/training/train_ham10000_hyper*.py 的 --cond）——同样是追加，既有方法出现顺序不变；
+# 其它数据集无该 key，run_spec 会静默跳过。
 METHODS = ("erm", "swad", "roc", "groupdro",
-           "hyperhead", "hyperfusion", "hyperadapt", "hyperadapt_swad")
+           "hyperhead", "hyperfusion", "hyperadapt", "hyperadapt_swad",
+           "hyperhead_sexage", "hyperfusion_sexage", "hyperadapt_sexage")
 # 配对 bootstrap 的参照基线：新增 `groupdro`（训练时用子群标签的基线），使
 # 「HN vs GroupDRO」= 同样用属性、只差 conditioning vs reweighting 的干净对比。
 BASELINES = ("erm", "swad", "groupdro")
@@ -226,8 +230,15 @@ def run_spec(spec: Spec, n_boot: int) -> dict | None:
             for j, key in enumerate(("overall", "canonical_worst", "marginal_worst", "gap")):
                 d = B[m][:, j] - B[base][:, j]
                 lo, hi = np.percentile(d, [2.5, 97.5])
-                e[key] = {"delta": float(obs[m][j] - obs[base][j]), "ci": [float(lo), float(hi)],
-                          "sig": bool(lo > 0 or hi < 0)}
+                # 两侧 percentile bootstrap p：把自举分布中心化到观测 Δ 得零分布，读两尾超出的质量
+                # （第 4 章 §4.3.3 的定义）。用 (1+count)/(B+1) 避免 p=0——Holm 是按 p 排序的
+                # 步降法，恰好为 0 的并列会让阈值分配失去分辨力（Davison & Hinkley 的惯例）。
+                delta = float(obs[m][j] - obs[base][j])
+                null = d - delta
+                cnt = int((np.abs(null) >= abs(delta)).sum())
+                e[key] = {"delta": delta, "ci": [float(lo), float(hi)],
+                          "sig": bool(lo > 0 or hi < 0),
+                          "p": float((1 + cnt) / (len(null) + 1))}
             res["vs"][f"{m}_vs_{base}"] = e
     return res
 

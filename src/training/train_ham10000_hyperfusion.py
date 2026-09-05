@@ -13,6 +13,13 @@ I(Y;age|X)>0、sex 轴≈0，故只接 age。
     fairness = print_ham10000_fairness_report。
 超参由 --config_index 取自网格；显存接近 baseline，用 config 的 batch_size=128（无需调小）。
 
+**双属性对照臂（--cond sex_age）**：`--cond age`（缺省）保持原「只条件化 age」行为不变；
+`--cond sex_age` 把条件通路换成 sex+age（模型类 *SexAge，forward_sex_age），method 记为
+`<method>_sexage`，产物与 age-only 臂分开存放。动机：worst-group 评估口径是 Sex / Age /
+Sex×Age 三套分组，而 age-only 臂从未拿到 sex，条件化口径与评估口径不对称；本臂把条件输入
+补齐为评估分组变量全集，与 age-only 臂构成**唯一差异=条件输入**的单变量对照（样本集、
+age_group>=0 过滤、超参网格、split/seed 规程全部一致）。
+
 运行方式：重型任务，经 sbatch 提交（见 slurm/train_ham10000_hyperfusion.sh）。
 """
 
@@ -25,10 +32,12 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 
 from src.datasets.ham10000_dataset import HAM10000Dataset
-from src.models.resnet18_hyperfusion import ResNet18HyperFusionAge
+from src.models.resnet18_hyperfusion import ResNet18HyperFusionAge, ResNet18HyperFusionSexAge
 from src.training.harness.hparam_grid import get_hparam_config, grid_size
 from src.training.harness.run import seed_everything
-from src.training.harness.train_loop import forward_age, run_training, unpack_sex_age
+from src.training.harness.train_loop import (
+    forward_age, forward_sex_age, run_training, unpack_sex_age,
+)
 from src.utils.ham10000_fairness import print_ham10000_fairness_report
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -38,6 +47,7 @@ OUTPUT_DIR = Path("/vol/biomedic2/bglocker_studproj/zc125/outputs/ham10000")
 DATASET = "ham10000"
 METHOD = "hyperfusion"
 NUM_AGE = 4   # HAM age_group 有效组 {20-40,40-60,60-80,80+}=0..3
+NUM_SEX = 2   # HAM sex: 0=Male / 1=Female（双属性对照臂用）
 
 
 def load_config(path: Path) -> dict:
@@ -64,6 +74,11 @@ def parse_args() -> argparse.Namespace:
                         help="K 折 lesion 级 GroupKFold（路线 A 用 5）；0=用单次 80/10/10 划分（默认）。")
     parser.add_argument("--fold", type=int, default=None,
                         help="--cv>0 时指定折号 k ∈ [0,K)。")
+    parser.add_argument("--cond", type=str, default="age", choices=("age", "sex_age"),
+                        help="条件通路属性集：age=只条件化 age_group（默认，历史臂）；"
+                             "sex_age=同时条件化 sex+age_group（对称性对照臂，method 记为 "
+                             "<method>_sexage，与 age-only 臂产物分开存放）。两者唯一差异就是"
+                             "条件输入，样本集/过滤/评估口径完全一致。")
     return parser.parse_args()
 
 
@@ -160,18 +175,29 @@ def main() -> None:
     hparam = get_hparam_config(args.config_index)
     split_dir, output_dir = resolve_paths(cfg, args.cv, args.fold)
 
+    # 条件通路选择：age-only（历史臂）或 sex+age（对称性对照臂），二者仅差条件输入
+    sex_age = args.cond == "sex_age"
+    method = f"{METHOD}_sexage" if sex_age else METHOD
+    build_model = (
+        (lambda: ResNet18HyperFusionSexAge(
+            num_classes=1, num_sex=NUM_SEX, num_age=NUM_AGE, pretrained=cfg["model"]["pretrained"]))
+        if sex_age else
+        (lambda: ResNet18HyperFusionAge(
+            num_classes=1, num_age=NUM_AGE, pretrained=cfg["model"]["pretrained"]))
+    )
+    forward_fn = forward_sex_age if sex_age else forward_age
+
     seed_everything(seed)
-    print(f"Loading HAM10000 (malignant, age-conditioned HyperFusion)  "
+    print(f"Loading HAM10000 (malignant, {args.cond}-conditioned HyperFusion)  "
           f"split_dir={split_dir.name}  output_dir={output_dir.name}...")
     train_transform, eval_transform = build_transforms(cfg)
     train_loader, val_loader, test_loader = get_dataloaders(cfg, split_dir, train_transform, eval_transform)
 
     run_training(
-        dataset=DATASET, method=METHOD, output_dir=output_dir, cfg=cfg, hparam=hparam, seed=seed,
+        dataset=DATASET, method=method, output_dir=output_dir, cfg=cfg, hparam=hparam, seed=seed,
         train_loader=train_loader, val_loader=val_loader, test_loader=test_loader,
-        build_model=lambda: ResNet18HyperFusionAge(
-            num_classes=1, num_age=NUM_AGE, pretrained=cfg["model"]["pretrained"]),
-        unpack_fn=unpack_sex_age, forward_fn=forward_age,
+        build_model=build_model,
+        unpack_fn=unpack_sex_age, forward_fn=forward_fn,
         fairness_report_fn=_fairness_report,
         swad=args.swad,
     )
