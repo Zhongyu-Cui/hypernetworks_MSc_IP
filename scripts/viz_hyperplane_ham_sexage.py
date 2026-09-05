@@ -33,10 +33,11 @@ from src.models.resnet18_hyperadapt import ResNet18HyperAdaptSexAge
 from src.utils.hyperplane_viz import (
     build_discriminative_basis, build_pca_basis, in_plane_energy,
 )
+from src.paths import OUTPUTS_DIR
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = REPO_ROOT / "configs" / "ham10000_baseline.yaml"
-OUTPUTS_ROOT = Path("/vol/biomedic2/bglocker_studproj/zc125/outputs")
+OUTPUTS_ROOT = OUTPUTS_DIR
 DEFAULT_CKPT = (OUTPUTS_ROOT / "ham10000" / "cv5" /
                 "hyperadapt_sexage_lr3e-05_wd1e-03_seed42_best_overall.pth")
 OUT_DIR = OUTPUTS_ROOT / "ham10000" / "hyperplane_viz"

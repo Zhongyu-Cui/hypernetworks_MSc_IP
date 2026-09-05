@@ -36,9 +36,10 @@ from torchvision import transforms
 from src.training.attr_predictor import (
     extract_features, fit_attr_probe, load_cxr_16bit, load_rgb, save_fold_predictions,
 )
+from src.paths import OUTPUTS_DIR
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-OUTPUTS_ROOT = Path("/vol/biomedic2/bglocker_studproj/zc125/outputs")
+OUTPUTS_ROOT = OUTPUTS_DIR
 SPLIT_NAMES = ("train", "val", "test")
 
 

@@ -47,9 +47,10 @@ import pandas as pd
 from scripts.eaudit_m2c_full_target import sorted_view, weighted_auc
 from src.training.harness.predictions import load_predictions
 from src.training.harness.subgroup_auc import subgroup_masks
+from src.paths import OUTPUTS_DIR, REPO_ROOT
 
-OUTPUTS = Path("/vol/biomedic2/bglocker_studproj/zc125/outputs")
-SPLITS = Path("/vol/biomedic2/bglocker_studproj/zc125/code/hypernetworks_MSc_IP/data/splits")
+OUTPUTS = OUTPUTS_DIR
+SPLITS = REPO_ROOT / "data" / "splits"
 FOLD_SEEDS = (42, 43, 44, 45, 46)                 # fold k ↔ seed 42+k（既有 CV 布局）
 # 末尾追加实验 G（HN×SWAD 融合）的融合臂——**追加而非插入**，既有方法的出现顺序不变。
 # 该方法仅在 selected_configs.json 含其 key 且预测存在时才被载入，否则静默跳过（见 run_spec）。

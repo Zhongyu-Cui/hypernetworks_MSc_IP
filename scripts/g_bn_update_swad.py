@@ -58,8 +58,9 @@ from src.training.harness.train_loop import (
     DEVICE, evaluate, forward_age, forward_image_only, forward_skin, forward_sex_race_age,
     unpack_sex_age, unpack_sex_race_age, unpack_skin,
 )
+from src.paths import OUTPUTS_DIR
 
-OUTPUTS = Path("/vol/biomedic2/bglocker_studproj/zc125/outputs")
+OUTPUTS = OUTPUTS_DIR
 ARMS = ("swad", "hyperadapt_swad")          # 仅权重平均派生的两臂需要 BN 重估
 N_BN_STEPS = 500                            # 官方 trainer.py: n_steps = 500
 CV = 5

@@ -55,10 +55,11 @@ from src.training.harness.train_loop import (
 from src.utils.fitzpatrick_fairness import print_fitzpatrick_fairness_report
 from src.utils.ham10000_fairness import print_ham10000_fairness_report
 from src.utils.mimic_fairness import print_mimic_fairness_report
+from src.paths import OUTPUTS_DIR
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 # 消融产物独立成根，与既有各数据集 outputs（旧 fold↔seed 绑定布局）物理隔离，互不覆盖
-OUTPUT_ROOT = Path("/vol/biomedic2/bglocker_studproj/zc125/outputs/conditioning_ablation")
+OUTPUT_ROOT = OUTPUTS_DIR / "conditioning_ablation"
 
 # location → method 命名（none = 比较用 ERM，与 conditioning cell 共享 canonical base state）
 LOCATION_TO_METHOD = {

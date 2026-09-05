@@ -33,8 +33,9 @@ import numpy as np
 from scripts.eaudit_m2c_full_target import sorted_view, weighted_auc
 from src.training.harness.predictions import load_extra, load_predictions
 from src.training.harness.subgroup_auc import subgroup_masks
+from src.paths import OUTPUTS_DIR
 
-OUTPUTS_ROOT = Path("/vol/biomedic2/bglocker_studproj/zc125/outputs")
+OUTPUTS_ROOT = OUTPUTS_DIR
 DIRECTIONS = {"m2c": ("mimic", "chexpert"), "c2m": ("chexpert", "mimic")}
 CV = 5
 TRIALS = (0, 1, 2)

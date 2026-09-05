@@ -16,15 +16,23 @@
 #
 # 用法（每个 cell 一次提交，CONFIG_INDEX 取该 cell 选出的值）：
 #   sbatch --partition=<gpus24|gpus48> --job-name=e1_ham_full_confirm \
-#          --output=/vol/biomedic2/bglocker_studproj/zc125/logs/e1_ham_full_confirm.%N.%A_%a.log \
+#          --output=logs/e1_ham_full_confirm.%N.%A_%a.log \
 #          --export=ALL,DATASET=ham10000,LOCATION=full,CONFIG_INDEX=2 slurm/e1_condnet_confirm.sh
 #SBATCH --gres=gpu:1
 #SBATCH --time=0-04:00:00
 #SBATCH --exclude=semois,mira05
 #SBATCH --array=0-9
 
-source /vol/biomedic2/bglocker_studproj/zc125/software/miniconda3/bin/activate /vol/biomedic2/bglocker_studproj/zc125/envs/medimg
-export PYTHONPATH=/vol/biomedic2/bglocker_studproj/zc125/code/hypernetworks_MSc_IP
+# ---- 环境与仓库位置（均可用环境变量覆盖，便于换机器）----------------------
+#   HN_REPO_ROOT       本仓库根目录
+#   HN_CONDA_ACTIVATE  conda 的 activate 脚本；文件不存在时跳过，直接用当前 python
+#   HN_CONDA_ENV       conda 环境路径（配合 HN_CONDA_ACTIVATE 使用）
+REPO_ROOT="${HN_REPO_ROOT:-/vol/biomedic2/bglocker_studproj/zc125/code/hypernetworks_MSc_IP}"
+CONDA_ACTIVATE="${HN_CONDA_ACTIVATE:-/vol/biomedic2/bglocker_studproj/zc125/software/miniconda3/bin/activate}"
+CONDA_ENV="${HN_CONDA_ENV:-/vol/biomedic2/bglocker_studproj/zc125/envs/medimg}"
+[[ -f "$CONDA_ACTIVATE" ]] && source "$CONDA_ACTIVATE" "$CONDA_ENV"
+export PYTHONPATH="$REPO_ROOT"
+# ---------------------------------------------------------------------------
 export PYTHONUNBUFFERED=1
 
 : "${DATASET:?须经 --export 指定 DATASET}"
@@ -37,6 +45,6 @@ SEED=$((43 + SLURM_ARRAY_TASK_ID % 2))
 
 echo "E1_CONFIRM dataset=$DATASET location=$LOCATION config_index=$CONFIG_INDEX fold=$FOLD seed=$SEED cv=$CV"
 
-python /vol/biomedic2/bglocker_studproj/zc125/code/hypernetworks_MSc_IP/src/training/train_condnet.py \
+python "$REPO_ROOT"/src/training/train_condnet.py \
     --dataset "$DATASET" --location "$LOCATION" \
     --config_index "$CONFIG_INDEX" --seed "$SEED" --cv "$CV" --fold "$FOLD"

@@ -41,9 +41,10 @@ from src.training.harness.train_loop import (
     forward_soft_patient, run_training, unpack_sex_race_age_soft,
 )
 from src.utils.mimic_fairness import print_mimic_fairness_report
+from src.paths import OUTPUTS_DIR
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-OUTPUTS_ROOT = Path("/vol/biomedic2/bglocker_studproj/zc125/outputs")
+OUTPUTS_ROOT = OUTPUTS_DIR
 
 # 三个敏感轴的固定顺序（= SoftPatientEmbedding 的输入顺序）
 AXES = ("sex", "race", "age")

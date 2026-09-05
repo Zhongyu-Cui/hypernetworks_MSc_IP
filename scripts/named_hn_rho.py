@@ -43,8 +43,9 @@ from src.models.resnet18_hyperfusion import (
 from src.models.resnet18_hyperhead import (
     ResNet18HyperHead, ResNet18HyperHeadSexAge, ResNet18HyperHeadSkin,
 )
+from src.paths import OUTPUTS_DIR
 
-OUTPUTS = Path("/vol/biomedic2/bglocker_studproj/zc125/outputs")
+OUTPUTS = OUTPUTS_DIR
 N_FOLDS = 5
 SEED_OF_FOLD = lambda fold: 42 + fold          # noqa: E731  与 cv5 训练脚本一致
 

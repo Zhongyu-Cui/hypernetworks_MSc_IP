@@ -18,7 +18,7 @@
 #
 # 用法（每个 cell 一次提交；LOCATION ∈ {none,head,deep,full}）：
 #   sbatch --partition=<gpus24|gpus48> --job-name=e1_ham_full_search \
-#          --output=/vol/biomedic2/bglocker_studproj/zc125/logs/e1_ham_full_search.%N.%A_%a.log \
+#          --output=logs/e1_ham_full_search.%N.%A_%a.log \
 #          --export=ALL,DATASET=ham10000,LOCATION=full slurm/e1_condnet_search.sh
 #
 # ⚠️ 等-batch 纪律：四个 cell 一律用 config 的 bs=128（plan §1 锁死）。**不得**只给 C-Full 降 batch
@@ -29,8 +29,16 @@
 #SBATCH --exclude=semois,mira05                 # semois=永久坏节点（C 阶段纪律）；mira05=GPU device-handle 故障（作业 72191）
 #SBATCH --array=0-29
 
-source /vol/biomedic2/bglocker_studproj/zc125/software/miniconda3/bin/activate /vol/biomedic2/bglocker_studproj/zc125/envs/medimg
-export PYTHONPATH=/vol/biomedic2/bglocker_studproj/zc125/code/hypernetworks_MSc_IP
+# ---- 环境与仓库位置（均可用环境变量覆盖，便于换机器）----------------------
+#   HN_REPO_ROOT       本仓库根目录
+#   HN_CONDA_ACTIVATE  conda 的 activate 脚本；文件不存在时跳过，直接用当前 python
+#   HN_CONDA_ENV       conda 环境路径（配合 HN_CONDA_ACTIVATE 使用）
+REPO_ROOT="${HN_REPO_ROOT:-/vol/biomedic2/bglocker_studproj/zc125/code/hypernetworks_MSc_IP}"
+CONDA_ACTIVATE="${HN_CONDA_ACTIVATE:-/vol/biomedic2/bglocker_studproj/zc125/software/miniconda3/bin/activate}"
+CONDA_ENV="${HN_CONDA_ENV:-/vol/biomedic2/bglocker_studproj/zc125/envs/medimg}"
+[[ -f "$CONDA_ACTIVATE" ]] && source "$CONDA_ACTIVATE" "$CONDA_ENV"
+export PYTHONPATH="$REPO_ROOT"
+# ---------------------------------------------------------------------------
 export PYTHONUNBUFFERED=1
 
 : "${DATASET:?须经 --export 指定 DATASET（ham10000/fitzpatrick/mimic/chexpert）}"
@@ -43,6 +51,6 @@ SEED=42
 
 echo "E1_SEARCH dataset=$DATASET location=$LOCATION config_index=$CONFIG_INDEX fold=$FOLD seed=$SEED cv=$CV"
 
-python /vol/biomedic2/bglocker_studproj/zc125/code/hypernetworks_MSc_IP/src/training/train_condnet.py \
+python "$REPO_ROOT"/src/training/train_condnet.py \
     --dataset "$DATASET" --location "$LOCATION" \
     --config_index "$CONFIG_INDEX" --seed "$SEED" --cv "$CV" --fold "$FOLD"

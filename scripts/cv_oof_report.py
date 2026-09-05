@@ -41,8 +41,9 @@ from src.utils.operating_point_fairness import (
     to_prob, _clf_metrics, subgroup_classification_metrics,
     worst_group_clf, clf_gap, threshold_at_overall_fpr,
 )
+from src.paths import OUTPUTS_DIR
 
-OUTPUTS_ROOT = Path("/vol/biomedic2/bglocker_studproj/zc125/outputs")
+OUTPUTS_ROOT = OUTPUTS_DIR
 FOLD_SEEDS = (42, 43, 44, 45, 46)   # fold k ↔ seed 42+k（CV 搜索约定）
 
 # `hyperadapt_swad` = 实验 G（HN×SWAD 融合）的融合臂，**追加在末尾**使既有方法顺序/行序不变；

@@ -48,9 +48,10 @@ from src.datasets.mimic_cxr_dataset import MIMICCXRDataset
 from src.training.eval_ood_cxr import build_eval_transform, load_config
 from src.training.eval_ood_cxr import evaluate_ood
 from src.training.harness.predictions import save_predictions
+from src.paths import OUTPUTS_DIR
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-OUTPUTS_ROOT = Path("/vol/biomedic2/bglocker_studproj/zc125/outputs")
+OUTPUTS_ROOT = OUTPUTS_DIR
 ABLATION_DIR = OUTPUTS_ROOT / "conditioning_ablation"
 
 FOLD_SEEDS = (42, 43, 44, 45, 46)   # fold k ↔ seed 42+k（沿用既有 cv5 checkpoint 命名）

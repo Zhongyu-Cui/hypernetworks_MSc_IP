@@ -25,8 +25,8 @@ PAPILA = Sex×Age 4。四库均无 HAM 那样的「排除组」，故无需过�
 
 运行（复用各库既有的 CV 搜索 array 脚本，接口一致 `--config_index/--seed/--cv/--fold`）：
     sbatch --partition=gpus24 --job-name=mimic_gdro_cvsearch \
-      --output=/vol/.../logs/mimic_gdro_cvsearch.%N.%A_%a.log \
-      --export=ALL,PY_SCRIPT=/vol/.../src/training/train_groupdro.py,DATASET=mimic \
+      --output=logs/mimic_gdro_cvsearch.%N.%A_%a.log \
+      --export=ALL,PY_SCRIPT=src/training/train_groupdro.py,DATASET=mimic \
       slurm/c2_mimic_cv_search.sh
 （各 array 脚本用 `$PY_SCRIPT` 调用本文件，数据集经 `--dataset` 传入——见 slurm 脚本的 EXTRA_ARGS）
 """

@@ -18,8 +18,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from src.paths import OUTPUTS_DIR
 
-OUTPUTS = Path("/vol/biomedic2/bglocker_studproj/zc125/outputs")
+OUTPUTS = OUTPUTS_DIR
 DATASETS = [("HAM10000", "HAM10000"), ("Fitzpatrick", "Fitzpatrick17k"),
             ("MIMIC", "MIMIC-CXR"), ("CheXpert", "CheXpert")]
 HN = [("hyperhead", "HyperHead"), ("hyperfusion", "HyperFusion"),

@@ -33,6 +33,7 @@ from torch.utils.data import Dataset
 
 import numpy as np
 import pandas as pd
+from src.paths import SPLITS_DIR
 
 
 class HAM10000Dataset(Dataset):
@@ -86,9 +87,7 @@ class HAM10000Dataset(Dataset):
 if __name__ == "__main__":
     from torchvision import transforms
 
-    SPLIT_DIR = Path(
-        "/vol/biomedic2/bglocker_studproj/zc125/code/hypernetworks_MSc_IP/data/splits/ham10000"
-    )
+    SPLIT_DIR = SPLITS_DIR / "ham10000"
 
     transform = transforms.Compose([
         transforms.Resize((256, 256)),

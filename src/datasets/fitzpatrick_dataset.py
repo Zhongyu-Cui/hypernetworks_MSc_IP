@@ -27,6 +27,7 @@ from torch.utils.data import Dataset
 
 import numpy as np
 import pandas as pd
+from src.paths import SPLITS_DIR
 
 
 class FitzpatrickDataset(Dataset):
@@ -77,9 +78,7 @@ class FitzpatrickDataset(Dataset):
 if __name__ == "__main__":
     from torchvision import transforms
 
-    SPLIT_DIR = Path(
-        "/vol/biomedic2/bglocker_studproj/zc125/code/hypernetworks_MSc_IP/data/splits/fitzpatrick17k"
-    )
+    SPLIT_DIR = SPLITS_DIR / "fitzpatrick17k"
 
     transform = transforms.Compose([
         transforms.ToTensor(),

@@ -38,13 +38,15 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-REPO_ROOT = Path("/vol/biomedic2/bglocker_studproj/zc125/code/hypernetworks_MSc_IP")
+# 允许以 `python scripts/xxx.py` 直接运行（未设 PYTHONPATH 时自举仓库根）
+REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 # 复用 HAM 脚本里与属性数无关的核心工具
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from src.models.resnet18_hyperadapt import ResNet18HyperAdapt  # noqa: E402
+from src.paths import OUTPUTS_DIR  # noqa: E402
 from viz_hyperadapt_weight_trajectory import delta_theta_from_profile, pca_2d  # noqa: E402
 
 # MIMIC 三属性二值编码（对齐 mimic_cxr_dataset：sex Male=0/Female=1；race White=0/Non-White=1；
@@ -66,17 +68,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--checkpoint", type=str,
         default=str(
-            "/vol/biomedic2/bglocker_studproj/zc125/outputs/mimic_cxr/cv5/"
-            "hyperadapt_lr1e-04_wd1e-03_seed42_best_overall.pth"
+            OUTPUTS_DIR / "mimic_cxr" / "cv5"
+            / "hyperadapt_lr1e-04_wd1e-03_seed42_best_overall.pth"
         ),
         help="MIMIC HyperAdapt checkpoint（默认 oof-regime fold0=seed42 best_overall）",
     )
     parser.add_argument(
         "--out_dir", type=str,
-        default=str(
-            "/vol/biomedic2/bglocker_studproj/zc125/outputs/analysis/"
-            "hyperadapt_trajectory/mimic_fold0"
-        ),
+        default=str(OUTPUTS_DIR / "analysis" / "hyperadapt_trajectory" / "mimic_fold0"),
         help="产物输出目录",
     )
     parser.add_argument(

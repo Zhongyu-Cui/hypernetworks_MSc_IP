@@ -32,8 +32,9 @@ import numpy as np
 from scripts.build_oof_results_averaging import (
     N_BOOT, Spec, Views, clusters, load_folds,
 )
+from src.paths import OUTPUTS_DIR
 
-OUTPUTS = Path("/vol/biomedic2/bglocker_studproj/zc125/outputs")
+OUTPUTS = OUTPUTS_DIR
 
 # 实验 P 的四个臂 + 三个参照（GT-HyperAdapt / ERM / SWAD）
 PRED_ARMS = ("hyperadapt_pred", "hyperadapt_predhard", "hyperadapt_predperm", "hyperadapt_predconst")

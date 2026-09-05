@@ -10,7 +10,7 @@
 # run_id 不含 fold，靠 seed 区分，产物与 GT 臂同址 outputs/<ds>/cv5/ 但 method 名不同，互不覆盖）。
 #
 # 经 --export 注入：
-#   PY_SCRIPT    : 训练脚本绝对路径（如 .../train_fitzpatrick_hyperadapt_pred.py）
+#   PY_SCRIPT    : 训练脚本路径（相对仓库根或绝对均可）（如 .../train_fitzpatrick_hyperadapt_pred.py）
 #   ATTR_MODE    : soft(主线) / hard(消融) / perm(路由对照) / const(容量对照)
 #   CONFIG_INDEX : 超参网格序号；缺省 5 = lr3e-04_wd1e-03 = Fitzpatrick GT-HyperAdapt 选定配置
 #                  （HAM=0 / MIMIC=3 / CheXpert=4 / PAPILA=5，均为各库 GT 臂的 Pareto 选定值）
@@ -22,8 +22,8 @@
 #
 # 示例（Fitzpatrick 主线 soft 全 5 折）：
 #   sbatch --partition=gpus48 --job-name=p_fitz_soft \
-#          --output=/vol/.../logs/p_fitz_soft.%N.%A_%a.log \
-#          --export=ALL,PY_SCRIPT=/vol/.../src/training/train_fitzpatrick_hyperadapt_pred.py,ATTR_MODE=soft \
+#          --output=logs/p_fitz_soft.%N.%A_%a.log \
+#          --export=ALL,PY_SCRIPT=src/training/train_fitzpatrick_hyperadapt_pred.py,ATTR_MODE=soft \
 #          slurm/p_pred_attr.sh
 #SBATCH --gres=gpu:1
 #SBATCH --time=0-08:00:00
@@ -31,12 +31,22 @@
 #SBATCH --exclude=semois
 #SBATCH --array=0-4
 
-source /vol/biomedic2/bglocker_studproj/zc125/software/miniconda3/bin/activate /vol/biomedic2/bglocker_studproj/zc125/envs/medimg
-export PYTHONPATH=/vol/biomedic2/bglocker_studproj/zc125/code/hypernetworks_MSc_IP
+# ---- 环境与仓库位置（均可用环境变量覆盖，便于换机器）----------------------
+#   HN_REPO_ROOT       本仓库根目录
+#   HN_CONDA_ACTIVATE  conda 的 activate 脚本；文件不存在时跳过，直接用当前 python
+#   HN_CONDA_ENV       conda 环境路径（配合 HN_CONDA_ACTIVATE 使用）
+REPO_ROOT="${HN_REPO_ROOT:-/vol/biomedic2/bglocker_studproj/zc125/code/hypernetworks_MSc_IP}"
+CONDA_ACTIVATE="${HN_CONDA_ACTIVATE:-/vol/biomedic2/bglocker_studproj/zc125/software/miniconda3/bin/activate}"
+CONDA_ENV="${HN_CONDA_ENV:-/vol/biomedic2/bglocker_studproj/zc125/envs/medimg}"
+[[ -f "$CONDA_ACTIVATE" ]] && source "$CONDA_ACTIVATE" "$CONDA_ENV"
+export PYTHONPATH="$REPO_ROOT"
+# ---------------------------------------------------------------------------
 export PYTHONUNBUFFERED=1
 
+# PY_SCRIPT 允许写成相对仓库根的路径（如 src/training/train_ham10000_hyperadapt.py）
+[[ -n "$PY_SCRIPT" && "$PY_SCRIPT" != /* ]] && PY_SCRIPT="$REPO_ROOT/$PY_SCRIPT"
 if [[ -z "$PY_SCRIPT" ]]; then
-    echo "ERROR: 必须经 --export 传入 PY_SCRIPT=<训练脚本绝对路径>" >&2
+    echo "ERROR: 必须经 --export 传入 PY_SCRIPT=<训练脚本路径，相对仓库根或绝对均可>" >&2
     exit 1
 fi
 if [[ -z "$ATTR_MODE" ]]; then

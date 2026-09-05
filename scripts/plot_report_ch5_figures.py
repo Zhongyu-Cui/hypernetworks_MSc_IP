@@ -21,8 +21,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.patches import Ellipse
+from src.paths import OUTPUTS_DIR
 
-OUTPUTS = Path("/vol/biomedic2/bglocker_studproj/zc125/outputs")
+OUTPUTS = OUTPUTS_DIR
 FIGDIR = Path(__file__).resolve().parents[1] / "report" / "figures"
 
 # 报告正文字体为 XCharter（Charter 家族），图内文字取 serif 以求一致。

@@ -29,10 +29,11 @@ from src.training.harness.train_loop import (
 )
 from src.utils.mimic_fairness import print_mimic_fairness_report
 from src.utils.resampling import build_group_label_sampler
+from src.paths import OUTPUTS_DIR
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = REPO_ROOT / "configs" / "mimic_cxr_baseline.yaml"
-OUTPUT_DIR = Path("/vol/biomedic2/bglocker_studproj/zc125/outputs/mimic_cxr")
+OUTPUT_DIR = OUTPUTS_DIR / "mimic_cxr"
 
 DATASET = "mimic"
 METHOD = "erm"

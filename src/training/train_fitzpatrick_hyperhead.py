@@ -28,10 +28,11 @@ from src.training.harness.hparam_grid import get_hparam_config, grid_size
 from src.training.harness.run import seed_everything
 from src.training.harness.train_loop import forward_skin, run_training, unpack_skin
 from src.utils.fitzpatrick_fairness import print_fitzpatrick_fairness_report
+from src.paths import OUTPUTS_DIR
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = REPO_ROOT / "configs" / "fitzpatrick_baseline.yaml"
-OUTPUT_DIR = Path("/vol/biomedic2/bglocker_studproj/zc125/outputs/fitzpatrick")
+OUTPUT_DIR = OUTPUTS_DIR / "fitzpatrick"
 
 DATASET = "fitzpatrick"
 METHOD = "hyperhead"

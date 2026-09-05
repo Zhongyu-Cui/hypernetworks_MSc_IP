@@ -34,8 +34,9 @@ from pathlib import Path
 
 from src.training.eval_ood_cxr import build_target_test_loader, evaluate_ood
 from src.training.harness.predictions import save_predictions
+from src.paths import OUTPUTS_DIR
 
-OUTPUTS_ROOT = Path("/vol/biomedic2/bglocker_studproj/zc125/outputs")
+OUTPUTS_ROOT = OUTPUTS_DIR
 FOLD_SEEDS = (42, 43, 44, 45, 46)   # fold k ↔ seed 42+k
 CV = 5
 # 末尾追加实验 G 的融合臂（HyperAdapt+SWAD）——追加不插入，既有方法顺序不变。

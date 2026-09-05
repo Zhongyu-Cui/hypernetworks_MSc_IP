@@ -45,16 +45,14 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import GroupKFold, GroupShuffleSplit
+from src.paths import HAM10000_ROOT, SPLITS_DIR
 
 RANDOM_STATE = 42
 
-BASE_PATH = Path("/vol/biodata/data/HAM10000")
+BASE_PATH = HAM10000_ROOT
 CSV_PATH = BASE_PATH / "HAM10000_metadata.csv"
 IMG_DIR = BASE_PATH / "images"            # 已解压的原始 600×450 RGB JPEG（uint8）
-OUTPUT_DIR = Path(
-    "/vol/biomedic2/bglocker_studproj/zc125/code/hypernetworks_MSc_IP"
-    "/data/splits/ham10000"
-)
+OUTPUT_DIR = SPLITS_DIR / "ham10000"
 
 # 二分类标签映射（Maron et al. 2019 / MEDFAIR）
 MALIGNANT_DX = {"akiec", "mel"}

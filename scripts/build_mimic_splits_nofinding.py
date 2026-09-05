@@ -46,16 +46,14 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import GroupKFold, GroupShuffleSplit
+from src.paths import CXR_DATA_ROOT, SPLITS_DIR
 
 RANDOM_STATE = 42
 CV_VAL_FRAC = 0.10   # CV 每折 val 目标占总体比例（对齐 HAM/Fitz/CheXpert CV：val≈10%，train≈其余）
 
-BASE_PATH = Path("/vol/biodata/projects/chai/data")
+BASE_PATH = CXR_DATA_ROOT
 CSV_PATH = BASE_PATH / "cxr" / "cxr7-1m_master.csv"
-OUTPUT_DIR = Path(
-    "/vol/biomedic2/bglocker_studproj/zc125/code/hypernetworks_MSc_IP"
-    "/data/splits/mimic_cxr_nofinding"
-)
+OUTPUT_DIR = SPLITS_DIR / "mimic_cxr_nofinding"
 
 TARGET_LABEL = "No Finding"
 FRONTAL_VIEWS = ["PA", "AP"]

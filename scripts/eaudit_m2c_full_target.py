@@ -40,8 +40,9 @@ from pathlib import Path
 import numpy as np
 
 from src.training.harness.predictions import load_extra, load_predictions
+from src.paths import OUTPUTS_DIR
 
-OUTPUTS_ROOT = Path("/vol/biomedic2/bglocker_studproj/zc125/outputs")
+OUTPUTS_ROOT = OUTPUTS_DIR
 ABLATION_DIR = OUTPUTS_ROOT / "conditioning_ablation"
 PRED_DIR = OUTPUTS_ROOT / "ood_cxr" / "mimic2chexpert" / "cv5_full_target" / "predictions"
 MANIFEST = ABLATION_DIR / "eaudit_candidate_groups.json"

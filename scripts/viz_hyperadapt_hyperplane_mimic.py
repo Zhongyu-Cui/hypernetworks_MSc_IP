@@ -10,7 +10,7 @@ HyperAdapt(sex,race,age) 分类超平面的逐子群可视化（MIMIC-CXR，8 �
 
 运行（medimg env，实验室机器即可，纯推理）：
     PYTHONPATH=. python scripts/viz_hyperadapt_hyperplane_mimic.py \
-        --ckpt /vol/.../outputs/mimic_cxr/cv5/hyperadapt_lr1e-04_wd1e-03_seed42_best_overall.pth \
+        --ckpt "$HN_OUTPUTS"/mimic_cxr/cv5/hyperadapt_lr1e-04_wd1e-03_seed42_best_overall.pth \
         --split_dir data/splits/mimic_cxr_nofinding/cv5/fold0
 
 输出：outputs/mimic_cxr/hyperplane_viz/ 下 3 张 PNG + metrics JSON + arrays npz。
@@ -21,9 +21,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from src.utils.hyperplane_cxr_runner import CXRVizSpec, parse_args, run_hyperplane_viz
+from src.paths import OUTPUTS_DIR
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-OUTPUTS_ROOT = Path("/vol/biomedic2/bglocker_studproj/zc125/outputs")
+OUTPUTS_ROOT = OUTPUTS_DIR
 
 SPEC = CXRVizSpec(
     dataset_key="mimic_cxr",

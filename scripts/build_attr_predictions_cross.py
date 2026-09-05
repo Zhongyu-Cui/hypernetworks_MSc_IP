@@ -35,9 +35,10 @@ from scripts.build_attr_predictions import (
 from src.training.attr_predictor import PROBE_C, _softmax, _to_logit_matrix, fit_temperature
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
+from src.paths import OUTPUTS_DIR
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-OUTPUTS_ROOT = Path("/vol/biomedic2/bglocker_studproj/zc125/outputs")
+OUTPUTS_ROOT = OUTPUTS_DIR
 # full-target CSV 由 run_ood_cxr_full_target.build_full_target_csv 生成并缓存于此
 ABLATION_DIR = OUTPUTS_ROOT / "conditioning_ablation"
 CV = 5

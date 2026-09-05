@@ -16,7 +16,7 @@ CheXpert 特有注意
 
 运行（medimg env，实验室机器即可，纯推理）：
     PYTHONPATH=. python scripts/viz_hyperadapt_hyperplane_chexpert.py \
-        --ckpt /vol/.../outputs/chexpert_cxr/cv5/hyperadapt_lr3e-04_wd1e-04_seed42_best_overall.pth \
+        --ckpt "$HN_OUTPUTS"/chexpert_cxr/cv5/hyperadapt_lr3e-04_wd1e-04_seed42_best_overall.pth \
         --split_dir data/splits/chexpert_nofinding/cv5/fold0
 
 输出：outputs/chexpert_cxr/hyperplane_viz/ 下 3 张 PNG + metrics JSON + arrays npz。
@@ -27,9 +27,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from src.utils.hyperplane_cxr_runner import CXRVizSpec, parse_args, run_hyperplane_viz
+from src.paths import OUTPUTS_DIR
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-OUTPUTS_ROOT = Path("/vol/biomedic2/bglocker_studproj/zc125/outputs")
+OUTPUTS_ROOT = OUTPUTS_DIR
 
 SPEC = CXRVizSpec(
     dataset_key="chexpert_cxr",

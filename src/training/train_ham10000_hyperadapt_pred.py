@@ -54,10 +54,11 @@ from src.training.harness.train_loop import (
     unpack_sex_age_soft, unpack_sex_age_soft_pair,
 )
 from src.utils.ham10000_fairness import print_ham10000_fairness_report
+from src.paths import OUTPUTS_DIR
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = REPO_ROOT / "configs" / "ham10000_baseline.yaml"
-OUTPUT_DIR = Path("/vol/biomedic2/bglocker_studproj/zc125/outputs/ham10000")
+OUTPUT_DIR = OUTPUTS_DIR / "ham10000"
 
 DATASET = "ham10000"
 KEY_COL = "image_id"

@@ -27,6 +27,7 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 from torch.utils.data import Dataset
+from src.paths import SPLITS_DIR
 
 
 class MIMICCXRDataset(Dataset):
@@ -114,9 +115,7 @@ class MIMICCXRDataset(Dataset):
 if __name__ == "__main__":
     from torchvision import transforms
 
-    SPLIT_DIR = Path(
-        "/vol/biomedic2/bglocker_studproj/zc125/code/hypernetworks_MSc_IP/data/splits/mimic_cxr_nofinding"
-    )
+    SPLIT_DIR = SPLITS_DIR / "mimic_cxr_nofinding"
 
     transform = transforms.Compose([
         transforms.Grayscale(num_output_channels=3),

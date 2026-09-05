@@ -43,8 +43,9 @@ from src.training.eval_ood_cxr import build_eval_transform, evaluate_ood, load_c
 from src.training.harness.predictions import save_predictions
 from src.training.harness.train_loop import unpack_sex_race_age_soft
 from src.training.run_ood_cxr_full_target import build_full_target_csv, load_selected_config
+from src.paths import OUTPUTS_DIR
 
-OUTPUTS_ROOT = Path("/vol/biomedic2/bglocker_studproj/zc125/outputs")
+OUTPUTS_ROOT = OUTPUTS_DIR
 OUTPUT_DIR = {"mimic": OUTPUTS_ROOT / "mimic_cxr", "chexpert": OUTPUTS_ROOT / "chexpert_cxr"}
 AXES = ("sex", "race", "age")          # 顺序 = SoftPatientEmbedding 的输入顺序
 KEY_COL = "image_path"

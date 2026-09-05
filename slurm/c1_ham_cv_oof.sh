@@ -32,8 +32,8 @@
 #
 # 示例（ERM 全-CV + 逐折 SWAD 派生）：
 #   sbatch --partition=gpus24 --job-name=a_ham_erm_cv \
-#          --output=/vol/.../logs/a_ham_erm_cv.%N.%A_%a.log \
-#          --export=ALL,PY_SCRIPT=/vol/.../src/training/train_ham10000_resnet18.py,CONFIG_INDEX=2,SWAD=1 \
+#          --output=logs/a_ham_erm_cv.%N.%A_%a.log \
+#          --export=ALL,PY_SCRIPT=src/training/train_ham10000_resnet18.py,CONFIG_INDEX=2,SWAD=1 \
 #          slurm/c1_ham_cv_oof.sh
 #SBATCH --gres=gpu:1
 #SBATCH --time=0-04:00:00
@@ -41,12 +41,22 @@
 #SBATCH --exclude=semois
 #SBATCH --array=0-4
 
-source /vol/biomedic2/bglocker_studproj/zc125/software/miniconda3/bin/activate /vol/biomedic2/bglocker_studproj/zc125/envs/medimg
-export PYTHONPATH=/vol/biomedic2/bglocker_studproj/zc125/code/hypernetworks_MSc_IP
+# ---- 环境与仓库位置（均可用环境变量覆盖，便于换机器）----------------------
+#   HN_REPO_ROOT       本仓库根目录
+#   HN_CONDA_ACTIVATE  conda 的 activate 脚本；文件不存在时跳过，直接用当前 python
+#   HN_CONDA_ENV       conda 环境路径（配合 HN_CONDA_ACTIVATE 使用）
+REPO_ROOT="${HN_REPO_ROOT:-/vol/biomedic2/bglocker_studproj/zc125/code/hypernetworks_MSc_IP}"
+CONDA_ACTIVATE="${HN_CONDA_ACTIVATE:-/vol/biomedic2/bglocker_studproj/zc125/software/miniconda3/bin/activate}"
+CONDA_ENV="${HN_CONDA_ENV:-/vol/biomedic2/bglocker_studproj/zc125/envs/medimg}"
+[[ -f "$CONDA_ACTIVATE" ]] && source "$CONDA_ACTIVATE" "$CONDA_ENV"
+export PYTHONPATH="$REPO_ROOT"
+# ---------------------------------------------------------------------------
 export PYTHONUNBUFFERED=1
 
+# PY_SCRIPT 允许写成相对仓库根的路径（如 src/training/train_ham10000_hyperadapt.py）
+[[ -n "$PY_SCRIPT" && "$PY_SCRIPT" != /* ]] && PY_SCRIPT="$REPO_ROOT/$PY_SCRIPT"
 if [[ -z "$PY_SCRIPT" ]]; then
-    echo "ERROR: 必须经 --export 传入 PY_SCRIPT=<训练脚本绝对路径>" >&2
+    echo "ERROR: 必须经 --export 传入 PY_SCRIPT=<训练脚本路径，相对仓库根或绝对均可>" >&2
     exit 1
 fi
 if [[ -z "$CONFIG_INDEX" ]]; then

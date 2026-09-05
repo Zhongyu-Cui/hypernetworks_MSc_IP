@@ -34,8 +34,9 @@ from pathlib import Path
 
 from src.training.harness.pareto import Candidate, load_candidates
 from src.training.harness.run import Selection, swad_method_name
+from src.paths import OUTPUTS_DIR
 
-OUTPUTS_ROOT = Path("/vol/biomedic2/bglocker_studproj/zc125/outputs")
+OUTPUTS_ROOT = OUTPUTS_DIR
 
 # 数据集 → val 日志目录（PAPILA 原生全-CV 无 cv5 子目录；余者走 cv5/）。
 # 键为 subgroup_auc 的数据集 key；值为 outputs 下相对目录。

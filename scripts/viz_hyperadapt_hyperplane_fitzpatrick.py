@@ -29,7 +29,7 @@ Fitzpatrick 特有注意
 
 运行（medimg env，实验室机器即可，纯推理）：
     PYTHONPATH=. python scripts/viz_hyperadapt_hyperplane_fitzpatrick.py \
-        --ckpt /vol/.../outputs/fitzpatrick/cv5/hyperadapt_lr3e-04_wd1e-03_seed42_best_overall.pth \
+        --ckpt "$HN_OUTPUTS"/fitzpatrick/cv5/hyperadapt_lr3e-04_wd1e-03_seed42_best_overall.pth \
         --split_dir data/splits/fitzpatrick17k/cv5/fold0
 
 输出：outputs/fitzpatrick/hyperplane_viz/ 下 3 张 PNG + metrics JSON + arrays npz。
@@ -60,10 +60,11 @@ from src.utils.hyperplane_viz import (
     render_pathway_figure,
 )
 from src.utils.pathway_audit_report import run_pathway_audit
+from src.paths import OUTPUTS_DIR
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = REPO_ROOT / "configs" / "fitzpatrick_baseline.yaml"
-OUTPUTS_ROOT = Path("/vol/biomedic2/bglocker_studproj/zc125/outputs")
+OUTPUTS_ROOT = OUTPUTS_DIR
 # cv5 选中配置（cv5/selected_configs.json: hyperadapt = lr3e-04_wd1e-03），seed42 ↔ fold0
 DEFAULT_CKPT = (
     OUTPUTS_ROOT / "fitzpatrick" / "cv5" / "hyperadapt_lr3e-04_wd1e-03_seed42_best_overall.pth"

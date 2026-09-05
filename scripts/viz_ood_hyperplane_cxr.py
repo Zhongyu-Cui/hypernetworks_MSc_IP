@@ -58,9 +58,10 @@ from src.utils.ood_hyperplane_viz import (
     assert_same_frame, domain_shift_metrics, render_domain_shift_figure,
     render_subgroup_shift_bars,
 )
+from src.paths import OUTPUTS_DIR
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-OUTPUTS_ROOT = Path("/vol/biomedic2/bglocker_studproj/zc125/outputs")
+OUTPUTS_ROOT = OUTPUTS_DIR
 OOD_VIZ_ROOT = OUTPUTS_ROOT / "ood_cxr" / "hyperplane_viz"
 METHODS = ("erm", "swad", "hyperadapt")
 

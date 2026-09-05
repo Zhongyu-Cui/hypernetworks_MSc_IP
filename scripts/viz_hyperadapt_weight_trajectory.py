@@ -41,11 +41,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-REPO_ROOT = Path("/vol/biomedic2/bglocker_studproj/zc125/code/hypernetworks_MSc_IP")
+# 允许以 `python scripts/xxx.py` 直接运行（未设 PYTHONPATH 时自举仓库根）
+REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.models.resnet18_hyperadapt import ResNet18HyperAdaptAge  # noqa: E402
+from src.paths import OUTPUTS_DIR  # noqa: E402
 
 # HAM age 组的人类可读标签（对齐 build_ham10000_splits.py 的 20 岁分箱 0..3）
 AGE_LABELS = ["20-40", "40-60", "60-80", "80+"]
@@ -59,17 +61,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--checkpoint", type=str,
         default=str(
-            "/vol/biomedic2/bglocker_studproj/zc125/outputs/ham10000/cv5/"
-            "hyperadapt_lr3e-05_wd1e-04_seed42_best_overall.pth"
+            OUTPUTS_DIR / "ham10000" / "cv5"
+            / "hyperadapt_lr3e-05_wd1e-04_seed42_best_overall.pth"
         ),
         help="HyperAdapt(age) checkpoint（默认 HAM oof-regime fold0=seed42 best_overall）",
     )
     parser.add_argument(
         "--out_dir", type=str,
-        default=str(
-            "/vol/biomedic2/bglocker_studproj/zc125/outputs/analysis/"
-            "hyperadapt_trajectory/ham_fold0"
-        ),
+        default=str(OUTPUTS_DIR / "analysis" / "hyperadapt_trajectory" / "ham_fold0"),
         help="产物输出目录",
     )
     parser.add_argument(

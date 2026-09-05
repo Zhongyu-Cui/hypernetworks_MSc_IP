@@ -45,16 +45,14 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from src.paths import FITZPATRICK_ROOT, SPLITS_DIR
 
 RANDOM_STATE = 42
 
-BASE_PATH = Path("/vol/biodata/data/fitzpatrick17k")
+BASE_PATH = FITZPATRICK_ROOT
 CSV_PATH = BASE_PATH / "fitzpatrick17k.csv"
 IMG_DIR = BASE_PATH / "preproc_224x224"   # 已预处理 224x224 RGB JPEG（uint8）
-OUTPUT_DIR = Path(
-    "/vol/biomedic2/bglocker_studproj/zc125/code/hypernetworks_MSc_IP"
-    "/data/splits/fitzpatrick17k"
-)
+OUTPUT_DIR = SPLITS_DIR / "fitzpatrick17k"
 
 # three_partition_label → 二值 label（malignant=1，其余=0）
 MALIGNANT_LABEL = "malignant"

@@ -39,8 +39,9 @@ from src.training.harness.train_loop import (
 )
 from src.training.run_ood_cxr_full_target import build_full_target_loader  # sets file_system + GPU 检查
 from src.training.train_condnet import DATASET_SPECS
+from src.paths import OUTPUTS_DIR
 
-OUTPUTS = Path("/vol/biomedic2/bglocker_studproj/zc125/outputs/conditioning_ablation")
+OUTPUTS = OUTPUTS_DIR / "conditioning_ablation"
 CV_DIR = OUTPUTS / "mimic_cxr" / "cv5"
 PRED_DIR = OUTPUTS / "ood_e2_mimic2chexpert" / "predictions"
 CELLS = ("condnet_erm", "condnet_head", "condnet_deep", "condnet_full")

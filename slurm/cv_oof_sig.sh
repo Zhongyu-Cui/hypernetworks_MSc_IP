@@ -8,17 +8,25 @@
 #
 # 用法（经 --export 注入 DATASET；结果落 logs 与 --out）：
 #   sbatch --partition=gpus --job-name=mimic_sig \
-#          --output=/vol/biomedic2/bglocker_studproj/zc125/logs/mimic_sig.%N.%j.log \
-#          --export=ALL,DATASET=mimic,CONFIG_JSON=/vol/.../outputs/mimic_cxr/cv5/selected_configs.json,OUT=/vol/.../scratch/mimic_sig.txt \
+#          --output=logs/mimic_sig.%N.%j.log \
+#          --export=ALL,DATASET=mimic,CONFIG_JSON=$HN_WORK_ROOT/outputs/mimic_cxr/cv5/selected_configs.json,OUT=$HN_WORK_ROOT/scratch/mimic_sig.txt \
 #          slurm/cv_oof_sig.sh
 #SBATCH --gres=gpu:1
 #SBATCH --time=0-03:00:00
 #SBATCH --exclude=semois
 
-source /vol/biomedic2/bglocker_studproj/zc125/software/miniconda3/bin/activate /vol/biomedic2/bglocker_studproj/zc125/envs/medimg
-export PYTHONPATH=/vol/biomedic2/bglocker_studproj/zc125/code/hypernetworks_MSc_IP
+# ---- 环境与仓库位置（均可用环境变量覆盖，便于换机器）----------------------
+#   HN_REPO_ROOT       本仓库根目录
+#   HN_CONDA_ACTIVATE  conda 的 activate 脚本；文件不存在时跳过，直接用当前 python
+#   HN_CONDA_ENV       conda 环境路径（配合 HN_CONDA_ACTIVATE 使用）
+REPO_ROOT="${HN_REPO_ROOT:-/vol/biomedic2/bglocker_studproj/zc125/code/hypernetworks_MSc_IP}"
+CONDA_ACTIVATE="${HN_CONDA_ACTIVATE:-/vol/biomedic2/bglocker_studproj/zc125/software/miniconda3/bin/activate}"
+CONDA_ENV="${HN_CONDA_ENV:-/vol/biomedic2/bglocker_studproj/zc125/envs/medimg}"
+[[ -f "$CONDA_ACTIVATE" ]] && source "$CONDA_ACTIVATE" "$CONDA_ENV"
+export PYTHONPATH="$REPO_ROOT"
+# ---------------------------------------------------------------------------
 export PYTHONUNBUFFERED=1
-cd /vol/biomedic2/bglocker_studproj/zc125/code/hypernetworks_MSc_IP
+cd "$REPO_ROOT"
 
 if [[ -z "$DATASET" || -z "$OUT" ]]; then
     echo "ERROR: 需 --export DATASET / OUT（配置二选一：CONFIG_JSON 或 CONFIG）" >&2

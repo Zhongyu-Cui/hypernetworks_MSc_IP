@@ -43,6 +43,7 @@ from matplotlib import font_manager
 
 from scripts.eaudit_m2c_full_target import sorted_view, weighted_auc
 from src.training.harness.subgroup_auc import subgroup_masks
+from src.paths import OUTPUTS_DIR
 
 for _p in ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
            "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf"):
@@ -51,7 +52,7 @@ for _p in ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
 plt.rcParams["font.family"] = ["Noto Sans CJK JP", "Droid Sans Fallback", "DejaVu Sans"]
 plt.rcParams["axes.unicode_minus"] = False
 
-OUTPUTS = Path("/vol/biomedic2/bglocker_studproj/zc125/outputs")
+OUTPUTS = OUTPUTS_DIR
 OUT_DIR = OUTPUTS / "ood_cxr" / "variance_decomposition"
 N_FOLDS, TRIALS = 5, (0, 1, 2)
 N_BOOT = 1000

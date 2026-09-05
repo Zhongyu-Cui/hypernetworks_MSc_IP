@@ -34,11 +34,12 @@ from src.training.harness.train_loop import (
 )
 from src.utils.ham10000_fairness import print_ham10000_fairness_report
 from src.utils.resampling import build_group_label_sampler
+from src.paths import OUTPUTS_DIR
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = REPO_ROOT / "configs" / "ham10000_baseline.yaml"
 # 模型权重属于「由集群生成的大文件」，按项目规范存放在仓库外的根目录 outputs/，不进仓库
-OUTPUT_DIR = Path("/vol/biomedic2/bglocker_studproj/zc125/outputs/ham10000")
+OUTPUT_DIR = OUTPUTS_DIR / "ham10000"
 
 DATASET = "ham10000"
 METHOD = "erm"

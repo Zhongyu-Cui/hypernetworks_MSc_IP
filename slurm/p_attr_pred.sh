@@ -12,14 +12,22 @@
 #
 # 示例：
 #   sbatch --partition=gpus24 --job-name=p_attr_mimic \
-#          --output=/vol/.../logs/p_attr_mimic.%N.%j.log \
+#          --output=logs/p_attr_mimic.%N.%j.log \
 #          --export=ALL,DS=mimic slurm/p_attr_pred.sh
 #SBATCH --gres=gpu:1
 #SBATCH --time=0-06:00:00
 #SBATCH --exclude=semois
 
-source /vol/biomedic2/bglocker_studproj/zc125/software/miniconda3/bin/activate /vol/biomedic2/bglocker_studproj/zc125/envs/medimg
-export PYTHONPATH=/vol/biomedic2/bglocker_studproj/zc125/code/hypernetworks_MSc_IP
+# ---- 环境与仓库位置（均可用环境变量覆盖，便于换机器）----------------------
+#   HN_REPO_ROOT       本仓库根目录
+#   HN_CONDA_ACTIVATE  conda 的 activate 脚本；文件不存在时跳过，直接用当前 python
+#   HN_CONDA_ENV       conda 环境路径（配合 HN_CONDA_ACTIVATE 使用）
+REPO_ROOT="${HN_REPO_ROOT:-/vol/biomedic2/bglocker_studproj/zc125/code/hypernetworks_MSc_IP}"
+CONDA_ACTIVATE="${HN_CONDA_ACTIVATE:-/vol/biomedic2/bglocker_studproj/zc125/software/miniconda3/bin/activate}"
+CONDA_ENV="${HN_CONDA_ENV:-/vol/biomedic2/bglocker_studproj/zc125/envs/medimg}"
+[[ -f "$CONDA_ACTIVATE" ]] && source "$CONDA_ACTIVATE" "$CONDA_ENV"
+export PYTHONPATH="$REPO_ROOT"
+# ---------------------------------------------------------------------------
 export PYTHONUNBUFFERED=1
 
 if [[ -z "$DS" ]]; then
@@ -30,6 +38,6 @@ fi
 echo "=== 实验 P: 生成 g 的属性预测  dataset=$DS ==="
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 
-python "$PYTHONPATH/scripts/build_attr_predictions.py" \
+python "$REPO_ROOT/scripts/build_attr_predictions.py" \
     --dataset "$DS" --cv 5 \
     --batch_size "${BATCH:-128}" --num_workers "${WORKERS:-8}"

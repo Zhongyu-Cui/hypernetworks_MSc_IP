@@ -40,11 +40,12 @@ matplotlib.use("Agg")
 import matplotlib.font_manager as fm
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
+from src.paths import WORK_ROOT
 
 # ============================================================
 # 路径与常量
 # ============================================================
-ROOT = Path("/vol/biomedic2/bglocker_studproj/zc125")
+ROOT = WORK_ROOT
 LOG_DIR = ROOT / "logs"
 OUT_ROOT = ROOT / "outputs"
 

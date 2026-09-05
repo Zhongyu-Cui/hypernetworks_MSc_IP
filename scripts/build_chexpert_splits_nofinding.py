@@ -57,16 +57,14 @@ from pathlib import Path
 
 import pandas as pd
 from sklearn.model_selection import GroupKFold, GroupShuffleSplit
+from src.paths import CHEXPERT_META_ROOT, CXR_DATA_ROOT, SPLITS_DIR
 
 RANDOM_STATE = 42
 CV_VAL_FRAC = 0.10   # CV 每折 val 目标占总体比例（对齐 HAM/Fitz CV：val≈10%，train≈其余）
 
-BASE_PATH = Path("/vol/biodata/projects/chai/data")
+BASE_PATH = CXR_DATA_ROOT
 CSV_PATH = BASE_PATH / "cxr" / "cxr7-1m_master.csv"
-OUTPUT_DIR = Path(
-    "/vol/biomedic2/bglocker_studproj/zc125/code/hypernetworks_MSc_IP"
-    "/data/splits/chexpert_nofinding"
-)
+OUTPUT_DIR = SPLITS_DIR / "chexpert_nofinding"
 
 DATASET_NAME = "CheXpert-Plus"
 TARGET_LABEL = "No Finding"
@@ -74,7 +72,7 @@ FRONTAL_VIEWS = ["PA", "AP"]
 
 # ── 标签来源（官方 CheXbert 标注，按报告段区分）──────────────────────────
 # master CSV 的 No Finding 列用的是 findings 段（75.7% 伪影），本脚本改读官方 zip。
-CHEXBERT_ZIP = Path("/vol/biodata/data/chest_xray/CheXpert-Plus/chexbert_labels.zip")
+CHEXBERT_ZIP = CHEXPERT_META_ROOT / "chexbert_labels.zip"
 SECTION_TO_JSONL = {
     "report": "report_fixed.json",          # 全报告（与 MIMIC 官方同口径）正例率 ~5.8% —— 默认
     "impression": "impression_fixed.json",  # 仅 impression（≈ 原版 CheXpert 论文）正例率 ~8.4%

@@ -20,7 +20,7 @@
 #   SEED  = 42 + FOLD + 10 × TRIAL
 #
 # 由 --export 注入（与 trial 0 的原始提交参数**必须逐项一致**，否则等-batch/方法条件被破坏）：
-#   PY_SCRIPT    : 训练脚本绝对路径
+#   PY_SCRIPT    : 训练脚本路径（相对仓库根或绝对均可）
 #   CONFIG_INDEX : S1 选中 config 的网格序号（见 harness/hparam_grid.py）
 #   BATCH        : 可选；HyperAdapt 必须传 128（等-batch，见项目记忆：batch 不等会制造伪影）
 #   SWAD         : 可选；=1 时加 --swad（仅 ERM 用，逐折派生 SWAD——两数据集 SWAD 的选中 config
@@ -28,7 +28,7 @@
 #
 # 示例（MIMIC ERM + SWAD，选中 config=lr1e-04_wd1e-04 → index 2）：
 #   sbatch --partition=gpus24 --job-name=oodv2_mimic_erm \
-#          --output=/vol/biomedic2/bglocker_studproj/zc125/logs/oodv2_mimic_erm.%N.%A_%a.log \
+#          --output=logs/oodv2_mimic_erm.%N.%A_%a.log \
 #          --export=ALL,PY_SCRIPT=.../train_mimic_resnet18.py,CONFIG_INDEX=2,SWAD=1 \
 #          slurm/ood_trial.sh
 #SBATCH --gres=gpu:1
@@ -37,8 +37,18 @@
 #SBATCH --exclude=semois
 #SBATCH --array=0-9
 
-source /vol/biomedic2/bglocker_studproj/zc125/software/miniconda3/bin/activate /vol/biomedic2/bglocker_studproj/zc125/envs/medimg
-export PYTHONPATH=/vol/biomedic2/bglocker_studproj/zc125/code/hypernetworks_MSc_IP
+# ---- 环境与仓库位置（均可用环境变量覆盖，便于换机器）----------------------
+#   HN_REPO_ROOT       本仓库根目录
+#   HN_CONDA_ACTIVATE  conda 的 activate 脚本；文件不存在时跳过，直接用当前 python
+#   HN_CONDA_ENV       conda 环境路径（配合 HN_CONDA_ACTIVATE 使用）
+REPO_ROOT="${HN_REPO_ROOT:-/vol/biomedic2/bglocker_studproj/zc125/code/hypernetworks_MSc_IP}"
+CONDA_ACTIVATE="${HN_CONDA_ACTIVATE:-/vol/biomedic2/bglocker_studproj/zc125/software/miniconda3/bin/activate}"
+CONDA_ENV="${HN_CONDA_ENV:-/vol/biomedic2/bglocker_studproj/zc125/envs/medimg}"
+[[ -f "$CONDA_ACTIVATE" ]] && source "$CONDA_ACTIVATE" "$CONDA_ENV"
+export PYTHONPATH="$REPO_ROOT"
+# PY_SCRIPT 允许写成相对仓库根的路径（如 src/training/train_ham10000_hyperadapt.py）
+[[ -n "$PY_SCRIPT" && "$PY_SCRIPT" != /* ]] && PY_SCRIPT="$REPO_ROOT/$PY_SCRIPT"
+# ---------------------------------------------------------------------------
 export PYTHONUNBUFFERED=1
 
 if [[ -z "$PY_SCRIPT" || -z "$CONFIG_INDEX" ]]; then

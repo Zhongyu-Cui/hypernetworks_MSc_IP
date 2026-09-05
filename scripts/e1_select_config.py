@@ -27,8 +27,9 @@ import json
 from pathlib import Path
 
 import numpy as np
+from src.paths import OUTPUTS_DIR
 
-ABLATION_ROOT = Path("/vol/biomedic2/bglocker_studproj/zc125/outputs/conditioning_ablation")
+ABLATION_ROOT = OUTPUTS_DIR / "conditioning_ablation"
 MANIFEST = ABLATION_ROOT / "eaudit_candidate_groups.json"
 
 CELLS = ("condnet_erm", "condnet_head", "condnet_deep", "condnet_full")

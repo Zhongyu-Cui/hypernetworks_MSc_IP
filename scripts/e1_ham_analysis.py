@@ -75,9 +75,10 @@ from scipy.stats import rankdata
 
 from scripts.eaudit_m2c_full_target import sorted_view, weighted_auc
 from src.training.harness.predictions import load_predictions
+from src.paths import OUTPUTS_DIR
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-ABLATION_ROOT = Path("/vol/biomedic2/bglocker_studproj/zc125/outputs/conditioning_ablation")
+ABLATION_ROOT = OUTPUTS_DIR / "conditioning_ablation"
 DS = "ham10000"
 CV_DIR = ABLATION_ROOT / DS / "cv5"
 SPLIT_DIR = REPO_ROOT / "data" / "splits" / "ham10000" / "cv5"

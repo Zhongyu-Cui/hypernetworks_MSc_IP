@@ -61,9 +61,10 @@ from src.utils.hyperplane_cxr_runner import (
     group_triplet,
 )
 from src.utils.hyperplane_viz import in_plane_energy
+from src.paths import OUTPUTS_DIR
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-OUTPUTS_ROOT = Path("/vol/biomedic2/bglocker_studproj/zc125/outputs")
+OUTPUTS_ROOT = OUTPUTS_DIR
 FEAT_DIM = 512
 
 # CXR 8 子群：颜色只编码 race×age（4 级 ramp），sex 交给 marker 形状——

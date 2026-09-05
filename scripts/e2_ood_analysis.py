@@ -40,8 +40,9 @@ import numpy as np
 
 from scripts.eaudit_m2c_full_target import sorted_view, weighted_auc
 from src.training.harness.predictions import load_extra, load_predictions
+from src.paths import OUTPUTS_DIR
 
-OUTPUTS = Path("/vol/biomedic2/bglocker_studproj/zc125/outputs")
+OUTPUTS = OUTPUTS_DIR
 E2_PRED = OUTPUTS / "conditioning_ablation" / "ood_e2_mimic2chexpert" / "predictions"
 SWAD_PRED = OUTPUTS / "ood_cxr" / "mimic2chexpert" / "cv5_full_target" / "predictions"  # E-audit full-target
 MANIFEST = OUTPUTS / "conditioning_ablation" / "eaudit_candidate_groups.json"
