@@ -55,7 +55,7 @@ src/
 │   ├── train_<库>_<方法>.py   训练入口，每个 (数据集, 方法) 一个
 │   ├── train_condnet.py       框架 3 的统一入口（一个开关切换条件化范围）
 │   └── run_ood_cxr_*.py       跨库评估驱动
-├── utils/                各库 fairness 口径、超平面可视化
+├── utils/                各库 fairness 口径、阈值上的操作点与分类指标、超平面可视化
 scripts/                  数据划分、配置选择、各框架分析出表、绘图
 slurm/                    SLURM 作业脚本（训练与重推理都经此提交）
 configs/                  四个数据集的基础配置
@@ -160,15 +160,22 @@ python scripts/cv_oof_report.py --dataset ham10000 --section all # 单库的逐�
 
 ```bash
 # 一次性前置：SWAD 系臂当年只落了 test 预测，val 预测要从平均权重补推理（需 GPU）
+# 四个库各提交一次，DATASET ∈ {ham10000, fitzpatrick, mimic, chexpert}
 sbatch --job-name=swadval_ham --output=logs/swadval_ham.%N.%A_%a.log \
        --export=ALL,DATASET=ham10000 slurm/dump_swad_val.sh
 
 python scripts/build_group_levels_averaging.py                   # 逐组水平 + gap + 逐组 accuracy
 python scripts/build_group_tables.py                             # 出 docs/ 的表与备用 LaTeX
+python scripts/build_group_tables.py --rule fpr20_val            # 换阈值规则重出表（敏感性）
 ```
 
 > 阈值**逐折在该折验证集上选**（组无关的单一全局阈值，主口径 Youden J），施加到该折所有子群，
-> 指标折间平均——阈值从不接触评估数据，也不跨折池化。
+> 指标折间平均——阈值从不接触评估数据，也不跨折池化。三条阈值规则（`youden_val` /
+> `fpr20_val` / `half`）并列是敏感性检查，不是可挑选的口径。
+>
+> 这一步一次覆盖四个同分布数据集与两个迁移方向，迁移侧沿用 CV-OOF 的跨库预测，
+> 阈值取**源域**验证集——目标域没有验证集，部署时能用的只有源域定出的操作点。
+> 两类终点都是次要终点，显著性不并入主终点的 Holm family，按 exploratory 读。
 
 ## 框架 2：跨数据集迁移
 
