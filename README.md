@@ -305,11 +305,41 @@ control arms (`perm` shuffles the prediction, `const` replaces it by the trainin
 marginal).
 
 ```bash
+# In distribution. The probe job also caches the frozen features the transfer route reuses,
+# so run it for every dataset that route needs (DS in fitzpatrick/ham10000/mimic/chexpert).
 sbatch --export=ALL,DS=mimic slurm/p_attr_pred.sh              # fit the probe per fold
 sbatch --partition=gpus48 \
        --export=ALL,PY_SCRIPT=src/training/train_fitzpatrick_hyperadapt_pred.py,ATTR_MODE=soft \
        slurm/p_pred_attr.sh                                     # ATTR_MODE in soft/hard/perm/const
 python scripts/p_pred_attr_analysis.py --dataset fitzpatrick
+```
+
+The same arm also runs under transfer, and there `g` and HyperAdapt move together as a
+single method: the conditioning input of the target comes from the probe fitted on the
+source, never from the target itself.
+
+```bash
+# 1. Cross-dataset attribute predictions (CPU; needs the feature cache of both datasets,
+#    which the probe job above writes). Run the reverse direction as well.
+python scripts/build_attr_predictions_cross.py --source mimic --target chexpert
+
+# 2. Train the arm on the source. CONFIG_INDEX must name the ground-truth HyperAdapt
+#    configuration of that dataset: 3 (lr1e-04_wd1e-03) for MIMIC-CXR, 4 (lr3e-04_wd1e-04)
+#    for CheXpert. The job default is 5, which is the Fitzpatrick configuration.
+#    sigma_train is read off trials 0, 1 and 2, and an --export value cannot contain a
+#    comma, so submit one trial at a time, for ATTR_MODE=soft and for ATTR_MODE=const.
+sbatch --partition=gpus48 --job-name=p_mimic_soft_t0 \
+       --output=logs/p_mimic_soft_t0.%N.%A_%a.log \
+       --export=ALL,PY_SCRIPT=src/training/train_cxr_hyperadapt_pred.py,DS_ARG=mimic,ATTR_MODE=soft,CONFIG_INDEX=3,TRIAL=0 \
+       slurm/p_pred_attr.sh
+
+# 3. Score the whole target dataset, once per trial and per mode
+sbatch --partition=gpus24 --job-name=pood_m2c_soft_t0 \
+       --output=logs/pood_m2c_soft_t0.%N.%j.log \
+       --export=ALL,DIRECTION=m2c,ATTR_MODE=soft,TRIALS=0 slurm/p_ood_pred.sh
+
+# 4. Read both directions. The reference arms (ERM, SWAD, HyperAdapt, GroupDRO) are the
+#    full-target runs of Framework 2 and are not retrained here.
 python scripts/p_ood_analysis.py --direction m2c
 ```
 

@@ -260,11 +260,39 @@ python scripts/e3_nofc_analysis.py
 另配两个零信息对照臂（`perm` 打乱预测、`const` 用训练集边缘先验）。
 
 ```bash
+# 同分布。probe 作业同时缓存冻结特征，迁移那条路要复用，
+# 故迁移涉及的每个库都要跑一次（DS ∈ fitzpatrick/ham10000/mimic/chexpert）。
 sbatch --export=ALL,DS=mimic slurm/p_attr_pred.sh              # 逐折拟合 probe，落盘 p̂
 sbatch --partition=gpus48 \
        --export=ALL,PY_SCRIPT=src/training/train_fitzpatrick_hyperadapt_pred.py,ATTR_MODE=soft \
        slurm/p_pred_attr.sh                                     # ATTR_MODE ∈ soft/hard/perm/const
 python scripts/p_pred_attr_analysis.py --dataset fitzpatrick
+```
+
+同一条臂也跑迁移框架。迁移下 `g` 与 HyperAdapt 作为**单一方法整体搬运**：
+目标库的条件输入由**源库拟合的 probe**给出，目标库全程不参与拟合。
+
+```bash
+# 1. 跨库属性预测（CPU 即可；需要两个库的特征缓存，由上面的 probe 作业写出）。反方向同样跑一次。
+python scripts/build_attr_predictions_cross.py --source mimic --target chexpert
+
+# 2. 在源库上训练该臂。CONFIG_INDEX 必须写该库 GT HyperAdapt 的选定配置：
+#    MIMIC-CXR 为 3（lr1e-04_wd1e-03），CheXpert 为 4（lr3e-04_wd1e-04）；
+#    作业默认值 5 是 Fitzpatrick 的配置，对 CXR 不适用。
+#    σ_train 由 trial 0/1/2 读出，而 --export 的值不能含逗号，
+#    故每次只提一个 trial，且 ATTR_MODE=soft 与 ATTR_MODE=const 都要跑。
+sbatch --partition=gpus48 --job-name=p_mimic_soft_t0 \
+       --output=logs/p_mimic_soft_t0.%N.%A_%a.log \
+       --export=ALL,PY_SCRIPT=src/training/train_cxr_hyperadapt_pred.py,DS_ARG=mimic,ATTR_MODE=soft,CONFIG_INDEX=3,TRIAL=0 \
+       slurm/p_pred_attr.sh
+
+# 3. 评完整目标库，每个 trial、每个模式各提一次
+sbatch --partition=gpus24 --job-name=pood_m2c_soft_t0 \
+       --output=logs/pood_m2c_soft_t0.%N.%j.log \
+       --export=ALL,DIRECTION=m2c,ATTR_MODE=soft,TRIALS=0 slurm/p_ood_pred.sh
+
+# 4. 出两个方向的读数。参照臂（ERM / SWAD / HyperAdapt / GroupDRO）沿用框架 2 的
+#    full-target 产物，此处不重训。
 python scripts/p_ood_analysis.py --direction m2c
 ```
 
