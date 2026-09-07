@@ -6,6 +6,9 @@
                              四库分面，配对 cluster bootstrap 95% CI。
   2. `ch5_ood_noise.pdf`  —— OOD 框架，效应量 |d̄| 与训练噪声地板 sigma_train 并排，双方向。
   3. `ch5_rho.pdf`        —— 消融各 cell 的逐层 rho / rho_between（HAM 与 MIMIC）。
+  4. `ch5_decision.pdf`   —— 固定操作点上，各臂 worst-group accuracy 的增量与 Overall
+                             accuracy 增量的关系（四库分面），判断阈值侧的变动是否只是
+                             整模型操作点平移。
 
 运行（轻量 CPU）：
     PYTHONPATH=. python scripts/plot_report_ch5_figures.py
@@ -121,6 +124,98 @@ def plot_id_worst(path: Path) -> None:
     fig.tight_layout()
     fig.savefig(path, bbox_inches="tight")
     plt.close(fig)
+
+
+def plot_decision(path: Path) -> None:
+    """
+    固定操作点上，Delta worst-group accuracy 对 Delta Overall accuracy 的四库分面散点。
+
+    这张图要回答的是「阈值侧那些显著的变动，是组间再分配还是整模型平移」。若某臂真的
+    改善了最差子群而没动整体，点会落在纵轴附近；若只是整条 ROC 上的操作点跟着平移，
+    点会贴在 45 度线上。因此**两轴必须同尺**，否则 45 度线不成其为参照。
+
+    分面而不是把四库画进一张：各库的效应量差到六倍（HAM 的 Delta 到 0.06，MIMIC 只到
+    0.01），共用一把尺子会让两个胸片库缩成原点上的一团，而恰恰是它们在这个终点上出显著。
+    """
+    res = json.loads((OUTPUTS / "conditioning_ablation" /
+                      "group_levels_averaging.json").read_text())
+    HOLM = json.loads((OUTPUTS / "analysis" /
+                       "id_holm_verdicts_secondary.json").read_text())["youden_val:worst_accuracy"]
+    TITLE_OF = dict(DATASETS)
+    # 形状编码臂、颜色编码 Holm 判决（与 fig:id-delta 同一套色语言）
+    MARKERS = ["o", "s", "^", "D", "v"]
+    fig, axes = plt.subplots(1, 4, figsize=(7.1, 2.35))
+    for c, (key, title) in enumerate(DATASETS):
+        ax = axes[c]
+        vs = res[key]["vs"]
+        xs, ys = [], []
+        for (arm, label), mk in zip(ID_ARMS, MARKERS):
+            e = vs[f"{arm}_vs_erm"]
+            x = e["youden_val:overall_accuracy"]["delta"]
+            y = e["youden_val:worst_accuracy"]["delta"]
+            sig = HOLM[TITLE_OF[key]][f"{label} - ERM"]
+            colour = (POS if y > 0 else NEG) if sig else NS
+            ax.plot(x, y, marker=mk, markersize=5.2, markerfacecolor=colour,
+                    markeredgecolor="white", markeredgewidth=0.6, linestyle="none",
+                    label=label if c == 0 else None, zorder=3)
+            xs.append(x)
+            ys.append(y)
+        # ERM 自身是参照，落在原点上，画成空心以示它不是一个被比较的臂
+        ax.plot(0, 0, marker="o", markersize=4.2, markerfacecolor="white",
+                markeredgecolor=MUTED, markeredgewidth=0.7, linestyle="none", zorder=3)
+        lim = max(max(abs(v) for v in xs + ys) * 1.28, 1e-3)
+        ax.plot([-lim, lim], [-lim, lim], color=MUTED, linewidth=0.7,
+                linestyle=(0, (3, 2)), zorder=1)
+        ax.axhline(0, color=GRID, linewidth=0.6, zorder=0)
+        ax.axvline(0, color=GRID, linewidth=0.6, zorder=0)
+        ax.set_xlim(-lim, lim)
+        ax.set_ylim(-lim, lim)
+        ax.set_aspect("equal")
+        r = float(np.corrcoef(xs, ys)[0, 1])
+        ax.text(0.04, 0.955, f"$r={r:+.2f}$", transform=ax.transAxes, fontsize=7.5,
+                color=INK, va="top", ha="left")
+        ax.set_title(title, fontsize=8.5, color=INK, pad=4)
+        step = _nice_step(lim)
+        ax.set_xticks([-step, 0, step])
+        ax.set_yticks([-step, 0, step])
+        lab = [f"$-${step:.2f}".replace("0.", "."), "0", f"{step:.2f}".replace("0.", ".")]
+        ax.set_xticklabels(lab, fontsize=7.5)
+        # 四格尺度互不相同（MIMIC 只到 0.01 而 HAM 到 0.07），故**每格都标 y 刻度**；
+        # 共用一套标签会让读者拿首格的尺子去读其余三格
+        ax.set_yticklabels(lab, fontsize=7.5)
+        ax.grid(color=GRID, linewidth=0.5)
+        ax.set_axisbelow(True)
+        _style(ax)
+    axes[0].set_ylabel("$\\Delta$ worst-group accuracy", fontsize=8.5, color=MUTED)
+    fig.supxlabel("$\\Delta$ Overall accuracy", fontsize=8.5, color=MUTED, y=0.06)
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="lower center", ncol=5, frameon=False,
+               fontsize=7.5, bbox_to_anchor=(0.5, -0.045), handletextpad=0.25,
+               columnspacing=1.5, labelcolor=MUTED)
+    fig.tight_layout()
+    fig.savefig(path, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _nice_step(lim: float) -> float:
+    """
+    给对称轴挑一个刻度步长：形如 1/2/5 乘 10 的幂，且**保证落在量程内**。
+
+    取「不超过量程」的最大候选，而不是「最接近半量程」的候选——后者会在量程略小于某个
+    整档时选到量程之外，刻度被裁掉只剩一个 0，四个分面的尺度就无从比较。
+
+    Args:
+        lim: 对称轴的半量程（轴范围为 [-lim, lim]）。
+
+    Returns:
+        刻度步长。
+    """
+    exp = np.floor(np.log10(lim))
+    for m in (5.0, 2.0, 1.0):
+        step = m * 10 ** exp
+        if step <= lim * 0.95:
+            return float(step)
+    return float(10 ** (exp - 1) * 5)
 
 
 def plot_ood_ratio(path: Path) -> None:
@@ -269,6 +364,7 @@ def main() -> None:
     plot_ood_ratio(FIGDIR / "ch5_ood_ratio.pdf")
     plot_rho(FIGDIR / "ch5_rho.pdf")
     plot_hyperplane(FIGDIR / "ch5_hyperplane.pdf")
+    plot_decision(FIGDIR / "ch5_decision.pdf")
     print("done ->", FIGDIR)
 
 

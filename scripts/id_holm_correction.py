@@ -26,7 +26,17 @@ DATASETS = [("HAM10000", "HAM10000"), ("Fitzpatrick", "Fitzpatrick17k"),
 HN = [("hyperhead", "HyperHead"), ("hyperfusion", "HyperFusion"),
       ("hyperadapt", "HyperAdapt")]
 BASE = [("erm", "ERM"), ("swad", "SWAD"), ("groupdro", "GroupDRO")]
-METRIC = "marginal_worst"          # 主终点；次要终点不并入 family
+METRIC = "marginal_worst"          # 主终点；次要终点不并入主终点的 family
+# 次要终点：组间 gap 与固定操作点上的 accuracy 类读数。它们**各自**在同一个 11 比较族内
+# 校正（同一族划法，只是换一个终点），**不与主终点合并**——合并会改变主终点的校正基数，
+# 进而改动第 5 章「12 个比较无一存活」这条核心陈述。数字源见 build_group_levels_averaging.py。
+SECONDARY = [
+    ("marginal_gap", "marginal gap (AUC)"),
+    ("youden_val:worst_accuracy", "worst-group accuracy"),
+    ("youden_val:worst_balanced_accuracy", "worst-group balanced accuracy"),
+    ("youden_val:gap_accuracy", "accuracy gap"),
+    ("youden_val:gap_balanced_accuracy", "balanced accuracy gap"),
+]
 
 
 def holm(pvals: dict[str, float], alpha: float = 0.05) -> dict[str, bool]:
@@ -39,22 +49,38 @@ def holm(pvals: dict[str, float], alpha: float = 0.05) -> dict[str, bool]:
     return out
 
 
-def comparisons(ds: str, res: dict, scope: str) -> dict[str, tuple[float, float, bool]]:
-    """按 scope 取出该库的比较集合，返回 {名称: (delta, p, 未校正是否显著)}。"""
-    sx = "_sexage" if ds == "HAM10000" else ""
+def comparisons(ds: str, res: dict, scope: str,
+                metric: str = METRIC, sexage_keys: bool = True,
+                ) -> dict[str, tuple[float, float, bool]]:
+    """
+    按 scope 取出该库的比较集合。
+
+    Args:
+        ds     : 数据集键。
+        res    : 该库的结果字典（含 `vs`）。
+        scope  : "11" / "9" / "5"，见模块 docstring。
+        metric : 终点键（缺省主终点）。
+        sexage_keys: 结果 JSON 的 HAM HN 臂是否带 `_sexage` 后缀。
+                 `oof_results_averaging.json` 带；`group_levels_averaging.json` 已在
+                 生成时归一为无后缀的报告臂名，故取 False。
+
+    Returns:
+        {名称: (delta, p, 未校正是否显著)}。
+    """
+    sx = "_sexage" if (ds == "HAM10000" and sexage_keys) else ""
     out: dict[str, tuple[float, float, bool]] = {}
     arms_vs_erm = [("swad", "SWAD"), ("groupdro", "GroupDRO")] + HN
     if scope in ("11", "5"):
         for a, al in arms_vs_erm:
             k = f"{a}{sx}_vs_erm" if (a, al) in HN else f"{a}_vs_erm"
-            e = res["vs"][k][METRIC]
+            e = res["vs"][k][metric]
             out[f"{al} - ERM"] = (e["delta"], e["p"], e["sig"])
     if scope in ("11", "9"):
         for h, hl in HN:
             for b, bl in BASE:
                 if scope == "11" and b == "erm":
                     continue                      # vs ERM 已在上面加入
-                e = res["vs"][f"{h}{sx}_vs_{b}"][METRIC]
+                e = res["vs"][f"{h}{sx}_vs_{b}"][metric]
                 out[f"{hl} - {bl}"] = (e["delta"], e["p"], e["sig"])
     return out
 
@@ -92,6 +118,34 @@ def main() -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(verdicts, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"\n已落盘 -> {out}")
+
+    sec_path = OUTPUTS / "conditioning_ablation" / "group_levels_averaging.json"
+    if not sec_path.exists():
+        print(f"[跳过次要终点] 缺 {sec_path}（先跑 build_group_levels_averaging.py）")
+        return
+    sec_all = json.loads(sec_path.read_text())
+    sec_verdicts: dict[str, dict[str, dict[str, bool]]] = {}
+    print("\n" + "=" * 70)
+    print("次要终点（各自在同一个 11 比较族内 Holm，不与主终点合并）")
+    print("=" * 70)
+    for metric, label in SECONDARY:
+        sec_verdicts[metric] = {}
+        row = [f"{label:<30}"]
+        for ds, name in DATASETS:
+            if ds not in sec_all:
+                continue
+            comp = comparisons(ds, sec_all[ds], "11", metric=metric, sexage_keys=False)
+            rej = holm({k: v[1] for k, v in comp.items()})
+            sec_verdicts[metric][name] = rej
+            # 只数「HN vs 基线」，因为这才是本报告要判决的对象
+            hn_hits = sum(1 for k, v in rej.items()
+                          if v and k.split(" - ")[0].startswith("Hyper"))
+            row.append(f"{name}: {hn_hits}/9")
+        print("   ".join(row))
+    sec_out = OUTPUTS / "analysis" / "id_holm_verdicts_secondary.json"
+    sec_out.write_text(json.dumps(sec_verdicts, indent=2, ensure_ascii=False),
+                       encoding="utf-8")
+    print(f"\n已落盘 -> {sec_out}")
 
 
 if __name__ == "__main__":

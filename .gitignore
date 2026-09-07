@@ -41,8 +41,8 @@ build/
 !data/splits/
 !data/metadata/
 
-# LaTeX 报告编译产物（源码在 report/ 内，产物统一落在 report/build/）
-report/build/
+# 报告 LaTeX 源码与编译产物不随公开仓库分发；仓库内只保留成稿 report.pdf
+report/
 *.aux
 *.bbl
 *.bcf

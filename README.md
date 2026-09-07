@@ -67,15 +67,14 @@ scripts/                  splits, configuration selection, per-framework analysi
 slurm/                    SLURM jobs (all training and re-inference goes through these)
 configs/                  base configuration per dataset
 data/splits/              5-fold cross-validation indices, shipped with the repository
-report/                   LaTeX source of the report
-docs/                     working notes and experiment plans
+report.pdf                the final report (PDF)
 ```
 
-> `docs/` is the full record of the research process. Some of the experiments
-> recorded there (PAPILA, ROC post-processing, synthetic-attribute injection,
-> information-gate estimation) did not enter the final report and their code has
-> been removed from this repository; it remains recoverable from the git history.
-> The report in `report/` and this file are the authoritative description.
+> `report.pdf` is the final report and, with this file, the authoritative description
+> of the work. Its LaTeX sources and the internal working notes are not distributed
+> with this repository. Some experiments (PAPILA, ROC post-processing,
+> synthetic-attribute injection, information-gate estimation) did not enter the final
+> report and their code has been removed; it remains recoverable from the git history.
 
 ## Setup
 
@@ -202,7 +201,7 @@ sbatch --job-name=swadval_ham --output=logs/swadval_ham.%N.%A_%a.log \
        --export=ALL,DATASET=ham10000 slurm/dump_swad_val.sh
 
 python scripts/build_group_levels_averaging.py                   # levels, gaps, per-group accuracy
-python scripts/build_group_tables.py                             # tables for docs/ plus LaTeX
+python scripts/build_group_tables.py                             # summary tables plus LaTeX
 python scripts/build_group_tables.py --rule fpr20_val            # same tables under another rule
 ```
 
@@ -355,7 +354,10 @@ python scripts/viz_hyperadapt_trajectory_mimic.py               # MIMIC, three a
 
 # Training curves, and the four figures of the results chapter
 python scripts/plot_training_curves.py
-python scripts/plot_report_ch5_figures.py                       # writes into report/figures/
+python scripts/plot_report_ch5_figures.py                       # writes into report/figures/ (created locally)
+
+# The nineteen tables of Appendix A, one file each
+python scripts/build_appendix_a_tables.py                       # writes into report/sections/appendix_a/ (local)
 ```
 
 The hyperplane scripts default to the fold-0 checkpoint of each dataset's selected

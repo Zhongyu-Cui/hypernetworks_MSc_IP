@@ -60,13 +60,12 @@ scripts/                  数据划分、配置选择、各框架分析出表、
 slurm/                    SLURM 作业脚本（训练与重推理都经此提交）
 configs/                  四个数据集的基础配置
 data/splits/              5 折交叉验证的划分索引（CSV，随仓库分发）
-report/                   报告 LaTeX 源码
-docs/                     实验过程记录与方案文档
+report.pdf                最终报告（PDF）
 ```
 
-> `docs/` 是研究过程的完整记录，其中一部分实验（PAPILA、ROC 后处理、合成属性注入、
+> `report.pdf` 是最终报告，与本文件一同构成对本工作的权威说明。报告的 LaTeX 源码
+> 与内部实验记录不随本仓库分发。一部分实验（PAPILA、ROC 后处理、合成属性注入、
 > 信息闸门估计等）没有进入最终报告，相应代码已从本仓库移除，可从提交历史取回。
-> 代码与报告以 `report/` 与本文件为准。
 
 ## 环境准备
 
@@ -174,7 +173,7 @@ sbatch --job-name=swadval_ham --output=logs/swadval_ham.%N.%A_%a.log \
        --export=ALL,DATASET=ham10000 slurm/dump_swad_val.sh
 
 python scripts/build_group_levels_averaging.py                   # 逐组水平 + gap + 逐组 accuracy
-python scripts/build_group_tables.py                             # 出 docs/ 的表与备用 LaTeX
+python scripts/build_group_tables.py                             # 出汇总表与备用 LaTeX
 python scripts/build_group_tables.py --rule fpr20_val            # 换阈值规则重出表（敏感性）
 ```
 
@@ -305,7 +304,10 @@ python scripts/viz_hyperadapt_trajectory_mimic.py               # MIMIC，三属
 
 # 训练曲线，以及报告第 5 章的四张图
 python scripts/plot_training_curves.py
-python scripts/plot_report_ch5_figures.py                       # 写入 report/figures/
+python scripts/plot_report_ch5_figures.py                       # 写入 report/figures/（本地生成）
+
+# 附录 A 的十九张表，每张一个文件
+python scripts/build_appendix_a_tables.py                       # 写入 report/sections/appendix_a/（本地）
 ```
 
 超平面脚本默认读各数据集选定配置的 fold 0 检查点，用 `--ckpt` 可指定其它检查点。
