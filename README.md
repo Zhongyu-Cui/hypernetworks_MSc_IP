@@ -66,15 +66,14 @@ src/
 scripts/                  splits, configuration selection, per-framework analysis, plotting
 slurm/                    SLURM jobs (all training and re-inference goes through these)
 configs/                  base configuration per dataset
-data/splits/              5-fold cross-validation indices, shipped with the repository
-report.pdf                the final report (PDF)
+data/splits/              5-fold cross-validation indices (HAM10000 and Fitzpatrick17k only)
 ```
 
-> `report.pdf` is the final report and, with this file, the authoritative description
-> of the work. Its LaTeX sources and the internal working notes are not distributed
-> with this repository. Some experiments (PAPILA, ROC post-processing,
-> synthetic-attribute injection, information-gate estimation) did not enter the final
-> report and their code has been removed; it remains recoverable from the git history.
+> The report itself, its LaTeX sources and the internal working notes are not
+> distributed with this repository, so this file is the authoritative description of
+> the code. Some experiments (PAPILA, ROC post-processing, synthetic-attribute
+> injection, information-gate estimation) did not enter the final report and their
+> code has been removed; it remains recoverable from the git history.
 
 ## Setup
 
@@ -122,10 +121,13 @@ baselines, so keep it for smoke tests only.
 ## Data and splits
 
 All four datasets are public and de-identified; obtain access yourself, place them
-locally and point the environment variables at them. The 5-fold indices in
-`data/splits/` ship with the repository, so reproducing the reported numbers does
-not require rebuilding them. To rebuild from the raw data (folds are grouped by the
-unit in the table above, so no lesion and no patient crosses a fold boundary):
+locally and point the environment variables at them. The 5-fold indices for HAM10000
+and Fitzpatrick17k ship with the repository in `data/splits/`. **The MIMIC-CXR and
+CheXpert indices do not.** They are keyed by patient identifier and carry the
+demographics and the label, so shipping them would redistribute derived data from
+sources whose access agreements do not permit it; rebuild them locally once you hold
+access. The folds are grouped by the unit in the table above, so no lesion and no
+patient crosses a fold boundary:
 
 ```bash
 python scripts/build_ham10000_splits.py
@@ -135,7 +137,8 @@ python scripts/build_fitzpatrick_splits.py        # single split first
 python scripts/build_fitzpatrick_cv_splits.py     # folds are derived from it
 ```
 
-Each of these reproduces the shipped indices byte for byte.
+Every one of these scripts is deterministic (fixed seed), so the indices it writes
+are the ones the reported results were computed on.
 
 ## Framework 1: in-distribution evaluation
 

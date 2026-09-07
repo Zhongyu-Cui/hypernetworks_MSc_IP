@@ -59,13 +59,12 @@ src/
 scripts/                  数据划分、配置选择、各框架分析出表、绘图
 slurm/                    SLURM 作业脚本（训练与重推理都经此提交）
 configs/                  四个数据集的基础配置
-data/splits/              5 折交叉验证的划分索引（CSV，随仓库分发）
-report.pdf                最终报告（PDF）
+data/splits/              5 折交叉验证的划分索引（仅 HAM10000 与 Fitzpatrick17k）
 ```
 
-> `report.pdf` 是最终报告，与本文件一同构成对本工作的权威说明。报告的 LaTeX 源码
-> 与内部实验记录不随本仓库分发。一部分实验（PAPILA、ROC 后处理、合成属性注入、
-> 信息闸门估计等）没有进入最终报告，相应代码已从本仓库移除，可从提交历史取回。
+> 报告本身、报告的 LaTeX 源码与内部实验记录均不随本仓库分发，故对代码的权威说明是
+> 本文件。一部分实验（PAPILA、ROC 后处理、合成属性注入、信息闸门估计等）没有进入
+> 最终报告，相应代码已从本仓库移除，可从提交历史取回。
 
 ## 环境准备
 
@@ -107,8 +106,10 @@ SLURM 作业另有三个：`HN_REPO_ROOT`（仓库位置）、`HN_CONDA_ACTIVATE
 ## 数据与划分
 
 四个数据集均为公开去标识化数据，需自行取得访问权限后放到本地，再用环境变量指到对应位置。
-仓库内 `data/splits/` 已含现成的 5 折划分索引，直接复现报告结果不需要重新生成；
-要从原始数据重建（划分按上表的单位分组，杜绝同病灶/同患者跨折泄漏）：
+仓库内 `data/splits/` 已含 HAM10000 与 Fitzpatrick17k 的 5 折划分索引。
+**MIMIC-CXR 与 CheXpert 的划分索引不随仓库分发**——它们以患者标识为键、且带有
+人口学属性与标签，随仓库发布等于再分发这两个数据源的衍生数据，而其访问协议不允许；
+取得访问权限后在本地重建即可。划分按上表的单位分组，杜绝同病灶/同患者跨折泄漏：
 
 ```bash
 python scripts/build_ham10000_splits.py
@@ -117,6 +118,8 @@ python scripts/build_chexpert_splits_nofinding.py
 python scripts/build_fitzpatrick_splits.py        # 先建单次划分
 python scripts/build_fitzpatrick_cv_splits.py     # 再由它派生 5 折
 ```
+
+以上脚本均为确定性（固定随机种子），生成的划分索引即报告结果所依据的那一份。
 
 ## 框架 1：同分布评估
 
